@@ -1,0 +1,204 @@
+name: Build FPS Zombie APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.4.1
+
+    env:
+      GODOT_VERSION: "4.4.1"
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Java and locate Android SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v java >/dev/null 2>&1 || ! command -v keytool >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-17-jdk unzip curl
+            else
+              echo "Java/keytool is missing and apt-get is unavailable."
+              exit 1
+            fi
+          fi
+
+          JAVA_BIN="$(readlink -f "$(command -v java)")"
+          export JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+          java -version
+
+          SDK=""
+          for candidate in \
+            "${ANDROID_HOME:-}" \
+            "${ANDROID_SDK_ROOT:-}" \
+            /opt/android-sdk \
+            /usr/lib/android-sdk \
+            /usr/local/android-sdk \
+            /usr/local/lib/android/sdk \
+            /root/Android/Sdk; do
+            if [ -n "$candidate" ] && [ -d "$candidate" ] && [ -d "$candidate/platform-tools" ]; then
+              SDK="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$SDK" ]; then
+            SDK="$(find /opt /usr/local /usr/lib /root -maxdepth 5 -type d -name 'platform-tools' 2>/dev/null | head -n 1 | sed 's#/platform-tools$##' || true)"
+          fi
+
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+            echo "ERROR: Android SDK not found in the runner image."
+            echo "This image must include Android SDK/platform-tools and Android build tools."
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "Android SDK: $SDK"
+          ls -la "$SDK"
+
+      - name: Locate Godot project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f project.godot
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          echo "Godot project directory: $GITHUB_WORKSPACE"
+
+      - name: Install Godot Android export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /github/home/.local/share/godot/export_templates/4.4.1.stable
+          curl -fL --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz" \
+            -o /tmp/godot-templates.tpz
+          mkdir -p /tmp/godot-templates
+          unzip -q -o /tmp/godot-templates.tpz -d /tmp/godot-templates
+          TEMPLATE_DIR="$(find /tmp/godot-templates -type f -name android_debug.apk -print -quit | xargs -r dirname)"
+          if [ -z "$TEMPLATE_DIR" ] || [ ! -f "$TEMPLATE_DIR/android_release.apk" ]; then
+            echo "ERROR: Android export templates were not found in downloaded archive."
+            find /tmp/godot-templates -maxdepth 5 -type f | head -n 100
+            exit 1
+          fi
+          cp "$TEMPLATE_DIR"/* /github/home/.local/share/godot/export_templates/4.4.1.stable/
+          ls -lh /github/home/.local/share/godot/export_templates/4.4.1.stable/
+
+      - name: Configure Java, Android SDK and debug signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /github/home/.config/godot
+          KEYSTORE=/github/home/.android/debug.keystore
+          mkdir -p "$(dirname "$KEYSTORE")"
+
+          if [ ! -f "$KEYSTORE" ]; then
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          cat > /tmp/configure_godot.py <<'PY'
+          import os
+          from pathlib import Path
+
+          home = Path("/github/home")
+          sdk = os.environ["ANDROID_HOME"]
+          java = os.environ["JAVA_HOME"]
+          settings = home / ".config/godot/editor_settings-4.tres"
+          settings.parent.mkdir(parents=True, exist_ok=True)
+          content = settings.read_text() if settings.exists() else '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
+          values = {
+              'export/android/android_sdk_path': sdk,
+              'export/android/java_sdk_path': java,
+          }
+          for key, value in values.items():
+              line = f'{key} = "{value}"'
+              import re
+              pattern = re.compile(r'^' + re.escape(key) + r'\s*=.*$', re.MULTILINE)
+              if pattern.search(content):
+                  content = pattern.sub(line, content)
+              else:
+                  content += '\n' + line
+          settings.write_text(content)
+          PY
+          python3 /tmp/configure_godot.py
+
+          PRESET="$PROJECT_DIR/export_presets.cfg"
+          if [ ! -f "$PRESET" ]; then
+            echo "ERROR: export_presets.cfg not found."
+            exit 1
+          fi
+          python3 - "$PRESET" "$KEYSTORE" <<'PY'
+          import sys
+          from pathlib import Path
+          p = Path(sys.argv[1])
+          keystore = sys.argv[2]
+          text = p.read_text()
+          additions = {
+              'keystore/debug': keystore,
+              'keystore/debug_user': 'androiddebugkey',
+              'keystore/debug_password': 'android',
+          }
+          for key, value in additions.items():
+              import re
+              line = f'{key} = "{value}"'
+              pattern = re.compile(r'^' + re.escape(key) + r'\s*=.*$', re.MULTILINE)
+              if pattern.search(text):
+                  text = pattern.sub(line, text)
+              else:
+                  text += '\n' + line
+          p.write_text(text)
+          PY
+
+      - name: Import project resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --editor --path "$PROJECT_DIR" --quit
+
+      - name: Export Android APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROJECT_DIR/build"
+          godot --headless --path "$PROJECT_DIR" \
+            --export-debug "Android" \
+            "$PROJECT_DIR/build/FPSZombieSurvival.apk"
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$PROJECT_DIR/build/FPSZombieSurvival.apk"
+          test -s "$APK"
+          file "$APK"
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FPS-Zombie-Survival-APK
+          path: ${{ env.PROJECT_DIR }}/build/FPSZombieSurvival.apk
+          if-no-files-found: error
+          retention-days: 14
