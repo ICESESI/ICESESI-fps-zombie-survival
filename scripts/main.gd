@@ -182,6 +182,7 @@ func _build_start_screen() -> void:
 	var shade := ColorRect.new()
 	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	shade.color = Color(0.015, 0.025, 0.03, 0.94)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(shade)
 	var panel := Panel.new()
 	panel.anchor_left = 0.5
@@ -213,6 +214,7 @@ func _build_start_screen() -> void:
 	start_button.text = "MULA BERMAIN"
 	start_button.position = Vector2(75, 225)
 	start_button.size = Vector2(370, 58)
+	start_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	start_button.add_theme_font_size_override("font_size", 23)
 	start_button.pressed.connect(_start_game)
 	panel.add_child(start_button)
