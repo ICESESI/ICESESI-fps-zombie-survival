@@ -37,6 +37,13 @@ var chapter_label: Label
 var joystick_base: Panel
 var joystick_knob: Panel
 var fire_button: Button
+var switch_weapon_button: Button
+var shotgun_button: Button
+var sniper_button: Button
+var aim_touch_id := -1
+var fire_held := false
+var reload_total := 1.15
+var armor := 0
 var reload_button: Button
 var shop_button: Button
 var restart_button: Button
@@ -505,7 +512,7 @@ func _spawn_zombie(at_position: Vector3, is_boss := false) -> void:
 
 func _spawn_random_loot(at_position: Vector3) -> void:
 	var roll := rng.randi_range(0, 99)
-	var kind := "ammo" if roll < 50 else ("heal" if roll < 80 else "bomb")
+	var kind := "ammo" if roll < 42 else ("heal" if roll < 68 else ("bomb" if roll < 88 else "vest"))
 	var pickup := Node3D.new()
 	pickup.name = "Loot_" + kind
 	pickup.position = at_position + Vector3(rng.randf_range(-1.0, 1.0), -0.8, rng.randf_range(-1.0, 1.0))
@@ -514,12 +521,12 @@ func _spawn_random_loot(at_position: Vector3) -> void:
 	var box := BoxMesh.new()
 	box.size = Vector3(0.55, 0.45, 0.55)
 	mesh.mesh = box
-	var color := Color(0.2, 0.65, 1.0) if kind == "ammo" else (Color(0.2, 1.0, 0.35) if kind == "heal" else Color(1.0, 0.35, 0.08))
+	var color := Color(0.2, 0.65, 1.0) if kind == "ammo" else (Color(0.2, 1.0, 0.35) if kind == "heal" else (Color(1.0, 0.35, 0.08) if kind == "bomb" else Color(0.9, 0.8, 0.25)))
 	mesh.material_override = _make_mat(color)
 	mesh.position.y = 0.3
 	pickup.add_child(mesh)
 	var tag := Label3D.new()
-	tag.text = "PELURU" if kind == "ammo" else ("HEAL" if kind == "heal" else "BOM")
+	tag.text = "PELURU" if kind == "ammo" else ("HEAL" if kind == "heal" else ("BOM" if kind == "bomb" else "VEST"))
 	tag.position.y = 1.0
 	tag.font_size = 32
 	tag.pixel_size = 0.009
@@ -557,10 +564,13 @@ func _update_loot_pickups(delta: float) -> void:
 				heal_charges += 1
 				heal_button.text = "HEAL x%d" % heal_charges
 				message_label.text = "+1 HEAL"
-			else:
+			elif kind == "bomb":
 				bomb_charges += 1
 				bomb_button.text = "BOM x%d" % bomb_charges
 				message_label.text = "+1 BOM"
+			else:
+				armor = mini(100, armor + 35)
+				message_label.text = "+35 VEST"
 			loot_pickups.erase(loot_target)
 			loot_target.queue_free()
 			loot_target = null
@@ -652,7 +662,23 @@ func _build_hud() -> void:
 	joystick_base.add_child(joystick_knob)
 
 	fire_button = _make_button(root, "TEMBAK", Vector2(116, 70), Vector2(-135, -90))
-	fire_button.pressed.connect(_shoot)
+	fire_button.pressed.connect(_fire_button_pressed)
+	fire_button.text = "●"
+	fire_button.size = Vector2(92, 92)
+	fire_button.custom_minimum_size = Vector2(92, 92)
+	var fire_style := StyleBoxFlat.new()
+	fire_style.bg_color = Color(0.78, 0.08, 0.06, 0.94)
+	fire_style.border_color = Color(1.0, 0.72, 0.45, 1.0)
+	fire_style.set_border_width_all(3)
+	fire_style.set_corner_radius_all(46)
+	fire_button.add_theme_stylebox_override("normal", fire_style)
+	var fire_hover := fire_style.duplicate() as StyleBoxFlat
+	fire_hover.bg_color = Color(0.95, 0.18, 0.08, 1.0)
+	fire_button.add_theme_stylebox_override("hover", fire_hover)
+	fire_button.add_theme_stylebox_override("pressed", fire_hover)
+	fire_button.add_theme_font_size_override("font_size", 34)
+	switch_weapon_button = _make_button(root, "TUKAR", Vector2(88, 44), Vector2(-145, -205))
+	switch_weapon_button.pressed.connect(_switch_weapon)
 	reload_button = _make_button(root, "RELOAD", Vector2(104, 52), Vector2(-250, -76))
 	reload_button.pressed.connect(_reload)
 	shop_button = _make_button(root, "KEDAI", Vector2(110, 52), Vector2(-135, -160))
@@ -679,8 +705,8 @@ func _build_hud() -> void:
 	shop_panel.anchor_bottom = 0.5
 	shop_panel.offset_left = -235
 	shop_panel.offset_right = 235
-	shop_panel.offset_top = -180
-	shop_panel.offset_bottom = 180
+	shop_panel.offset_top = -220
+	shop_panel.offset_bottom = 220
 	shop_panel.visible = false
 	shop_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(shop_panel)
@@ -712,6 +738,20 @@ func _build_hud() -> void:
 	rifle_button.pressed.connect(_buy_rifle)
 	shop_panel.add_child(rifle_button)
 
+	shotgun_button = Button.new()
+	shotgun_button.text = "BELI SHOTGUN — 700 KOIN"
+	shotgun_button.position = Vector2(20, 220)
+	shotgun_button.size = Vector2(420, 42)
+	shotgun_button.pressed.connect(_buy_shotgun)
+	shop_panel.add_child(shotgun_button)
+
+	sniper_button = Button.new()
+	sniper_button.text = "BELI SNIPER — 900 KOIN"
+	sniper_button.position = Vector2(20, 268)
+	sniper_button.size = Vector2(420, 42)
+	sniper_button.pressed.connect(_buy_sniper)
+	shop_panel.add_child(sniper_button)
+
 	var close_button := Button.new()
 	close_button.name = "ShopCloseButton"
 	close_button.text = "TUTUP"
@@ -739,10 +779,15 @@ func _process(delta: float) -> void:
 	if not started or game_over or victory:
 		return
 	fire_cooldown = maxf(0.0, fire_cooldown - delta)
+	if fire_held and fire_cooldown <= 0.0 and ammo > 0 and reload_timer <= 0.0:
+		_shoot()
+	if ammo <= 0 and reserve_ammo > 0 and reload_timer <= 0.0:
+		_reload(true)
 	if is_instance_valid(gun):
 		gun.position.z = move_toward(gun.position.z, -0.68, delta * 1.8)
 	if reload_timer > 0.0:
-		reload_timer -= delta
+		reload_timer = maxf(0.0, reload_timer - delta)
+		message_label.text = "RELOAD %.1fs" % reload_timer
 		if reload_timer <= 0.0:
 			var needed := magazine_size - ammo
 			var loaded := mini(needed, reserve_ammo)
@@ -864,16 +909,18 @@ func _kill_zombie(target: Node) -> void:
 	target.queue_free()
 	if is_boss:
 		victory = true
-		message_label.text = "BOSS TUMBANG! MISI SELESAI! +500 KOIN"
+		message_label.text = "VICTORY! BOSS TUMBANG! +500 KOIN"
 		restart_button.visible = true
+		_play_victory_animation()
 	elif zombies.is_empty():
 		if wave < MAX_WAVES:
 			wave += 1
 			_spawn_wave()
 		else:
 			victory = true
-			message_label.text = "SEMUA BABAK SELESAI!"
+			message_label.text = "VICTORY! SEMUA BABAK SELESAI!"
 			restart_button.visible = true
+			_play_victory_animation()
 	else:
 		message_label.text = "ZOMBIE TUMBANG! +25 KOIN"
 
@@ -897,7 +944,10 @@ func _update_zombies(delta: float) -> void:
 			zombie.velocity.z = 0
 			var attack_timer := float(zombie.get_meta("attack_timer", 0.7)) - delta
 			if attack_timer <= 0.0:
-				hp -= 22 if is_boss else 8
+				var incoming := 22 if is_boss else 8
+				var absorbed := mini(armor, incoming)
+				armor -= absorbed
+				hp -= incoming - absorbed
 				attack_timer = 1.0 if is_boss else 1.2
 				message_label.text = "HILMI JR PRO ZOMBIE MENYERANG!" if is_boss else "ZOMBIE MENYERANG!"
 			zombie.set_meta("attack_timer", attack_timer)
@@ -909,11 +959,19 @@ func _update_zombies(delta: float) -> void:
 	if hp <= 0:
 		_end_game()
 
+func _fire_button_pressed() -> void:
+	# Touches are handled on press in _input so dragging can aim without firing twice.
+	if not OS.has_feature("mobile"):
+		_shoot()
+
 func _shoot() -> void:
 	if not started or game_over or victory or shop_open or fire_cooldown > 0.0 or reload_timer > 0.0:
 		return
 	if ammo <= 0:
-		message_label.text = "PELURU HABIS — TEKAN RELOAD"
+		if reserve_ammo > 0:
+			_reload(true)
+		else:
+			message_label.text = "PELURU HABIS!"
 		return
 	ammo -= 1
 	fire_cooldown = fire_rate
@@ -945,11 +1003,12 @@ func _shoot() -> void:
 		message_label.text = ""
 	_update_hud()
 
-func _reload() -> void:
+func _reload(automatic: bool = false) -> void:
 	if not started or game_over or victory or reload_timer > 0.0 or ammo >= magazine_size or reserve_ammo <= 0:
 		return
 	reload_timer = RELOAD_SECONDS
-	message_label.text = "SEDANG RELOAD..."
+	reload_total = RELOAD_SECONDS
+	message_label.text = "AUTO RELOAD: %.1fs" % reload_timer if automatic else "RELOAD: %.1fs" % reload_timer
 
 func _toggle_shop() -> void:
 	if not started or game_over or victory:
@@ -1011,6 +1070,86 @@ func _buy_rifle() -> void:
 	_update_hud()
 	message_label.text = "RIFLE DIBELI!"
 
+func _buy_shotgun() -> void:
+	if weapon_tier >= 3:
+		message_label.text = "SHOTGUN SUDAH DIMILIKI"
+		return
+	if coins < 700:
+		message_label.text = "PERLU 700 KOIN UNTUK SHOTGUN"
+		return
+	coins -= 700
+	weapon_tier = 3
+	damage = 80
+	fire_rate = 0.75
+	magazine_size = 6
+	ammo = magazine_size
+	reserve_ammo += 36
+	_save_progress()
+	_refresh_gun()
+	_refresh_shop()
+	_update_hud()
+	message_label.text = "SHOTGUN DIBELI!"
+
+func _buy_sniper() -> void:
+	if weapon_tier >= 4:
+		message_label.text = "SNIPER SUDAH DIMILIKI"
+		return
+	if coins < 900:
+		message_label.text = "PERLU 900 KOIN UNTUK SNIPER"
+		return
+	coins -= 900
+	weapon_tier = 4
+	damage = 180
+	fire_rate = 0.9
+	magazine_size = 5
+	ammo = magazine_size
+	reserve_ammo += 25
+	_save_progress()
+	_refresh_gun()
+	_refresh_shop()
+	_update_hud()
+	message_label.text = "SNIPER DIBELI!"
+
+func _switch_weapon() -> void:
+	if not started or game_over or victory or shop_open:
+		return
+	if weapon_tier <= 0:
+		message_label.text = "BELI SENJATA DAHULU"
+		return
+	weapon_tier = 0 if weapon_tier >= 4 else weapon_tier + 1
+	if weapon_tier == 0:
+		damage = 50
+		fire_rate = 0.28
+		magazine_size = 12
+	elif weapon_tier == 1:
+		damage = 38
+		fire_rate = 0.12
+		magazine_size = 30
+	elif weapon_tier == 2:
+		damage = 100
+		fire_rate = 0.42
+		magazine_size = 8
+	elif weapon_tier == 3:
+		damage = 80
+		fire_rate = 0.75
+		magazine_size = 6
+	else:
+		damage = 180
+		fire_rate = 0.9
+		magazine_size = 5
+	ammo = mini(ammo, magazine_size)
+	_refresh_gun()
+	_update_hud()
+	message_label.text = "SENJATA: %s" % _weapon_name()
+
+func _weapon_name() -> String:
+	match weapon_tier:
+		1: return "SMG"
+		2: return "RIFLE"
+		3: return "SHOTGUN"
+		4: return "SNIPER"
+		_: return "PISTOL"
+
 func _refresh_gun() -> void:
 	if not is_instance_valid(gun):
 		return
@@ -1019,6 +1158,10 @@ func _refresh_gun() -> void:
 		mesh.size = Vector3(0.22, 0.19, 0.76)
 	elif weapon_tier == 2:
 		mesh.size = Vector3(0.25, 0.22, 0.98)
+	elif weapon_tier == 3:
+		mesh.size = Vector3(0.28, 0.24, 0.88)
+	elif weapon_tier == 4:
+		mesh.size = Vector3(0.22, 0.22, 1.2)
 	else:
 		mesh.size = Vector3(0.20, 0.16, 0.62)
 	gun.mesh = mesh
@@ -1031,15 +1174,30 @@ func _refresh_shop() -> void:
 	upgrade_button.text = "UPGRADE DAMAGE +15 — %d KOIN" % (100 + damage_level * 100)
 	smg_button.text = "SMG: DIMILIKI" if weapon_tier >= 1 else "BELI SMG — 250 KOIN"
 	rifle_button.text = "RIFLE: DIMILIKI" if weapon_tier >= 2 else "BELI RIFLE — 500 KOIN"
+	shotgun_button.text = "SHOTGUN: DIMILIKI" if weapon_tier >= 3 else "BELI SHOTGUN — 700 KOIN"
+	sniper_button.text = "SNIPER: DIMILIKI" if weapon_tier >= 4 else "BELI SNIPER — 900 KOIN"
+	shotgun_button.disabled = weapon_tier >= 3 or coins < 700
+	sniper_button.disabled = weapon_tier >= 4 or coins < 900
 	upgrade_button.disabled = coins < (100 + damage_level * 100)
 	smg_button.disabled = weapon_tier >= 1 or coins < 250
 	rifle_button.disabled = weapon_tier >= 2 or coins < 500
 
 func _update_hud() -> void:
 	if is_instance_valid(hud_label):
-		var weapon_name := "PISTOL" if weapon_tier == 0 else ("SMG" if weapon_tier == 1 else "RIFLE")
-		hud_label.text = "HP %d   |   %s   |   PELURU %d/%d   |   KOIN %d   |   SKOR %d   |   WAVE %d   |   HEAL %d BOM %d" % [maxi(hp, 0), weapon_name, ammo, reserve_ammo, coins, score, wave, heal_charges, bomb_charges]
+		var weapon_name := _weapon_name()
+		hud_label.text = "HP %d   |   %s   |   PELURU %d/%d   |   KOIN %d   |   SKOR %d   |   WAVE %d   |   HEAL %d BOM %d VEST %d" % [maxi(hp, 0), weapon_name, ammo, reserve_ammo, coins, score, wave, heal_charges, bomb_charges, armor]
 	_refresh_shop()
+
+func _play_victory_animation() -> void:
+	if not is_instance_valid(message_label):
+		return
+	message_label.scale = Vector2(0.5, 0.5)
+	message_label.modulate = Color(1.0, 0.8, 0.25, 0.0)
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(message_label, "scale", Vector2(1.25, 1.25), 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_property(message_label, "modulate", Color.WHITE, 0.45)
+	tween.chain().tween_property(message_label, "scale", Vector2.ONE, 0.25)
 
 func _end_game() -> void:
 	_debug_log("GAME: game over; score=%d coins=%d" % [score, coins])
@@ -1075,7 +1233,8 @@ func _dispatch_mobile_ui_touch(pos: Vector2) -> bool:
 	var buttons: Array[Button] = [
 		fire_button, reload_button, shop_button, jump_button,
 		heal_button, bomb_button, restart_button,
-		upgrade_button, smg_button, rifle_button
+		upgrade_button, smg_button, rifle_button, switch_weapon_button,
+		shotgun_button, sniper_button
 	]
 	if is_instance_valid(shop_panel):
 		for child in shop_panel.get_children():
@@ -1105,6 +1264,12 @@ func _dispatch_mobile_ui_touch(pos: Vector2) -> bool:
 				_buy_smg()
 			elif button == rifle_button:
 				_buy_rifle()
+			elif button == switch_weapon_button:
+				_switch_weapon()
+			elif button == shotgun_button:
+				_buy_shotgun()
+			elif button == sniper_button:
+				_buy_sniper()
 			else:
 				_toggle_shop()
 			return true
@@ -1119,6 +1284,22 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				_start_game()
 				return
+	if event is InputEventScreenTouch:
+		if event.pressed and is_instance_valid(fire_button) and fire_button.get_global_rect().has_point(event.position):
+			aim_touch_id = event.index
+			fire_held = true
+			_shoot()
+			get_viewport().set_input_as_handled()
+			return
+		elif not event.pressed and event.index == aim_touch_id:
+			fire_held = false
+			aim_touch_id = -1
+			get_viewport().set_input_as_handled()
+			return
+	if event is InputEventScreenDrag and event.index == aim_touch_id:
+		_rotate_view(event.relative)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventScreenTouch and event.pressed:
 		if _dispatch_mobile_ui_touch(event.position):
 			get_viewport().set_input_as_handled()
