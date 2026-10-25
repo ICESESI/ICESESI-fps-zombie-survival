@@ -1,70 +1,86 @@
 extends Node3D
 
-const ZOMBIE_COUNT := 7
-const PLAYER_SPEED := 5.2
+const PLAYER_SPEED := 5.5
 const LOOK_SENSITIVITY := 0.004
-const MAGAZINE_SIZE := 12
-const RELOAD_SECONDS := 1.25
+const RELOAD_SECONDS := 1.15
+const MAX_WAVES := 3
 
 var player: CharacterBody3D
 var camera: Camera3D
 var gun: MeshInstance3D
 var zombies: Array[CharacterBody3D] = []
 var hp := 100
-var ammo := MAGAZINE_SIZE
-var reserve_ammo := 72
+var ammo := 12
+var reserve_ammo := 96
+var coins := 0
 var score := 0
 var wave := 1
+var damage := 50
+var weapon_tier := 0
+var fire_rate := 0.28
+var magazine_size := 12
 var fire_cooldown := 0.0
 var reload_timer := 0.0
 var game_over := false
+var victory := false
+var boss_spawned := false
 var look_touch := -1
 var move_touch := -1
 var move_origin := Vector2.ZERO
 var move_vector := Vector2.ZERO
-var hud_label: Label
-var message_label: Label
-var joystick_base: ColorRect
-var joystick_knob: ColorRect
-var fire_button: Button
-var reload_button: Button
-var restart_button: Button
 var touch_look_last := Vector2.ZERO
 var pitch := 0.0
 var rng := RandomNumberGenerator.new()
+var hud_label: Label
+var message_label: Label
+var chapter_label: Label
+var joystick_base: Panel
+var joystick_knob: Panel
+var fire_button: Button
+var reload_button: Button
+var shop_button: Button
+var restart_button: Button
+var shop_panel: Panel
+var upgrade_button: Button
+var smg_button: Button
+var rifle_button: Button
+var shop_open := false
+var damage_level := 0
 
 func _ready() -> void:
 	rng.randomize()
 	_build_world()
 	_build_player()
-	_build_zombies()
 	_build_hud()
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_spawn_wave()
+	if not OS.has_feature("mobile"):
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_update_hud()
 
 func _build_world() -> void:
-	var world_env := WorldEnvironment.new()
+	var env_node := WorldEnvironment.new()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.035, 0.05, 0.065)
+	env.background_color = Color(0.055, 0.075, 0.09)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.55, 0.58, 0.62)
-	env.ambient_light_energy = 0.8
-	world_env.environment = env
-	add_child(world_env)
+	env.ambient_light_color = Color(0.72, 0.75, 0.78)
+	env.ambient_light_energy = 1.0
+	env_node.environment = env
+	add_child(env_node)
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48, -25, 0)
-	sun.light_energy = 1.15
+	sun.light_energy = 1.25
 	add_child(sun)
 
 	var ground := StaticBody3D.new()
 	ground.name = "Ground"
 	var ground_mesh := MeshInstance3D.new()
 	var plane := BoxMesh.new()
-	plane.size = Vector3(70, 1, 70)
+	plane.size = Vector3(100, 1, 100)
 	ground_mesh.mesh = plane
 	var ground_mat := StandardMaterial3D.new()
-	ground_mat.albedo_color = Color(0.17, 0.21, 0.17)
+	ground_mat.albedo_color = Color(0.19, 0.23, 0.18)
 	ground_mat.roughness = 1.0
 	ground_mesh.material_override = ground_mat
 	ground.add_child(ground_mesh)
@@ -76,20 +92,44 @@ func _build_world() -> void:
 	ground.position.y = -0.5
 	add_child(ground)
 
-	# Low-cost abandoned-yard props, created procedurally.
-	for i in range(18):
-		var x := rng.randf_range(-25, 25)
-		var z := rng.randf_range(-25, 25)
-		if Vector2(x, z).length() < 7.0:
+	# Simple perimeter walls and visible crates give the player clear landmarks.
+	for i in range(4):
+		var wall := StaticBody3D.new()
+		var wall_mesh := MeshInstance3D.new()
+		var wall_box := BoxMesh.new()
+		wall_box.size = Vector3(64, 3.5, 0.7) if i < 2 else Vector3(0.7, 3.5, 64)
+		wall_mesh.mesh = wall_box
+		var wall_mat := StandardMaterial3D.new()
+		wall_mat.albedo_color = Color(0.13, 0.16, 0.17)
+		wall_mesh.material_override = wall_mat
+		wall.add_child(wall_mesh)
+		var wall_col := CollisionShape3D.new()
+		var wall_shape := BoxShape3D.new()
+		wall_shape.size = wall_box.size
+		wall_col.shape = wall_shape
+		wall.add_child(wall_col)
+		if i == 0:
+			wall.position = Vector3(0, 1.75, -32)
+		elif i == 1:
+			wall.position = Vector3(0, 1.75, 32)
+		elif i == 2:
+			wall.position = Vector3(-32, 1.75, 0)
+		else:
+			wall.position = Vector3(32, 1.75, 0)
+		add_child(wall)
+
+	for i in range(14):
+		var x := rng.randf_range(-23.0, 23.0)
+		var z := rng.randf_range(-23.0, 23.0)
+		if Vector2(x, z).length() < 8.0:
 			continue
 		var prop := StaticBody3D.new()
 		var mesh_node := MeshInstance3D.new()
 		var box := BoxMesh.new()
-		box.size = Vector3(rng.randf_range(1.5, 4.0), rng.randf_range(1.2, 3.8), rng.randf_range(1.5, 4.0))
+		box.size = Vector3(rng.randf_range(1.5, 3.2), rng.randf_range(1.0, 2.4), rng.randf_range(1.5, 3.2))
 		mesh_node.mesh = box
 		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.16, 0.18, 0.19) if i % 2 == 0 else Color(0.22, 0.19, 0.15)
-		mat.roughness = 1.0
+		mat.albedo_color = Color(0.25, 0.22, 0.17) if i % 2 == 0 else Color(0.17, 0.21, 0.22)
 		mesh_node.material_override = mat
 		prop.add_child(mesh_node)
 		var col := CollisionShape3D.new()
@@ -104,7 +144,7 @@ func _build_world() -> void:
 func _build_player() -> void:
 	player = CharacterBody3D.new()
 	player.name = "Player"
-	player.position = Vector3(0, 1.0, 8)
+	player.position = Vector3(0, 1.0, 10)
 	var capsule := CollisionShape3D.new()
 	var capsule_shape := CapsuleShape3D.new()
 	capsule_shape.radius = 0.38
@@ -118,17 +158,15 @@ func _build_player() -> void:
 	camera.current = true
 	player.add_child(camera)
 
-	# Simple first-person weapon model visible at lower-right.
 	gun = MeshInstance3D.new()
 	var gun_mesh := BoxMesh.new()
-	gun_mesh.size = Vector3(0.18, 0.16, 0.62)
+	gun_mesh.size = Vector3(0.20, 0.16, 0.62)
 	gun.mesh = gun_mesh
 	var gun_mat := StandardMaterial3D.new()
-	gun_mat.albedo_color = Color(0.08, 0.09, 0.10)
+	gun_mat.albedo_color = Color(0.07, 0.08, 0.09)
 	gun.material_override = gun_mat
-	gun.position = Vector3(0.32, -0.28, -0.62)
+	gun.position = Vector3(0.34, -0.30, -0.68)
 	camera.add_child(gun)
-
 	var barrel := MeshInstance3D.new()
 	var barrel_mesh := BoxMesh.new()
 	barrel_mesh.size = Vector3(0.09, 0.09, 0.34)
@@ -138,64 +176,88 @@ func _build_player() -> void:
 	gun.add_child(barrel)
 	add_child(player)
 
-func _make_zombie_material() -> StandardMaterial3D:
+func _make_mat(color: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.25, 0.42, 0.24)
+	mat.albedo_color = color
 	mat.roughness = 1.0
 	return mat
 
-func _spawn_zombie(at_position: Vector3) -> void:
+func _spawn_zombie(at_position: Vector3, is_boss := false) -> void:
 	var zombie := CharacterBody3D.new()
-	zombie.name = "Zombie"
+	zombie.name = "HilmiJrProZombie" if is_boss else "Zombie"
 	zombie.position = at_position
-	zombie.set_meta("hp", 100)
-	zombie.set_meta("attack_timer", rng.randf_range(0.3, 1.0))
+	zombie.set_meta("hp", 1400 if is_boss else 100)
+	zombie.set_meta("max_hp", 1400 if is_boss else 100)
+	zombie.set_meta("attack_timer", 0.7)
+	zombie.set_meta("boss", is_boss)
+	zombie.set_meta("speed", 1.0 if is_boss else rng.randf_range(1.25, 1.8))
+
 	var body := MeshInstance3D.new()
-	var capsule_mesh := CapsuleMesh.new()
-	capsule_mesh.radius = 0.38
-	capsule_mesh.height = 1.55
-	body.mesh = capsule_mesh
-	body.material_override = _make_zombie_material()
-	body.position.y = 0.82
+	if is_boss:
+		var body_mesh := SphereMesh.new()
+		body_mesh.radius = 0.82
+		body_mesh.height = 1.65
+		body.mesh = body_mesh
+		body.scale = Vector3(1.35, 1.05, 1.1)
+		body.material_override = _make_mat(Color(0.42, 0.20, 0.16))
+		body.position.y = 0.95
+	else:
+		var capsule_mesh := CapsuleMesh.new()
+		capsule_mesh.radius = 0.38
+		capsule_mesh.height = 1.55
+		body.mesh = capsule_mesh
+		body.material_override = _make_mat(Color(0.25, 0.43, 0.24))
+		body.position.y = 0.82
 	zombie.add_child(body)
 
 	var head := MeshInstance3D.new()
 	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.25
-	head_mesh.height = 0.5
+	head_mesh.radius = 0.28 if is_boss else 0.25
+	head_mesh.height = 0.5 if is_boss else 0.45
 	head.mesh = head_mesh
-	var head_mat := StandardMaterial3D.new()
-	head_mat.albedo_color = Color(0.38, 0.52, 0.30)
-	head.material_override = head_mat
-	head.position = Vector3(0, 1.72, 0)
+	head.material_override = _make_mat(Color(0.47, 0.55, 0.31) if not is_boss else Color(0.52, 0.34, 0.27))
+	head.position = Vector3(0, 1.83 if is_boss else 1.68, 0)
 	zombie.add_child(head)
 
-	var eye_mat := StandardMaterial3D.new()
-	eye_mat.albedo_color = Color(0.8, 0.05, 0.025)
-	for eye_x in [-0.09, 0.09]:
+	var eye_mat := _make_mat(Color(1.0, 0.04, 0.015))
+	for eye_x in [-0.10, 0.10]:
 		var eye := MeshInstance3D.new()
 		var eye_mesh := SphereMesh.new()
-		eye_mesh.radius = 0.035
-		eye_mesh.height = 0.07
+		eye_mesh.radius = 0.045
 		eye.mesh = eye_mesh
 		eye.material_override = eye_mat
-		eye.position = Vector3(eye_x, 1.76, -0.215)
+		eye.position = Vector3(eye_x, 1.72 if is_boss else 1.70, -0.22)
 		zombie.add_child(eye)
 
 	var collision := CollisionShape3D.new()
 	var shape := CapsuleShape3D.new()
-	shape.radius = 0.38
-	shape.height = 1.65
+	shape.radius = 0.72 if is_boss else 0.38
+	shape.height = 2.05 if is_boss else 1.65
 	collision.shape = shape
+	collision.position.y = 0.95 if is_boss else 0.82
 	zombie.add_child(collision)
+
 	add_child(zombie)
 	zombies.append(zombie)
 
-func _build_zombies() -> void:
-	for i in range(ZOMBIE_COUNT):
-		var angle := TAU * float(i) / float(ZOMBIE_COUNT)
-		var radius := rng.randf_range(11.0, 19.0)
-		_spawn_zombie(Vector3(cos(angle) * radius, 0, sin(angle) * radius))
+func _spawn_wave() -> void:
+	boss_spawned = false
+	if wave >= 3:
+		boss_spawned = true
+		chapter_label.text = "BABAK 3: BOSS HILMI JR PRO ZOMBIE"
+		_spawn_zombie(player.global_position + Vector3(0, 0, -17), true)
+		for i in range(3):
+			var angle := TAU * float(i) / 3.0
+			_spawn_zombie(player.global_position + Vector3(cos(angle) * 12.0, 0, sin(angle) * 12.0), false)
+	else:
+		chapter_label.text = "BABAK %d: %s" % [wave, "KUBURAN TERBIAR" if wave == 1 else "GUDANG ZOMBIE"]
+		var count := 5 + wave * 2
+		for i in range(count):
+			var angle := TAU * float(i) / float(count)
+			var radius := rng.randf_range(12.0, 19.0)
+			_spawn_zombie(Vector3(cos(angle) * radius, 0, sin(angle) * radius), false)
+	message_label.text = "BERTAHAN HIDUP! KALAHKAN SEMUA ZOMBIE"
+	_update_hud()
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -203,122 +265,162 @@ func _build_hud() -> void:
 	add_child(layer)
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_PASS
 	layer.add_child(root)
 
+	chapter_label = Label.new()
+	chapter_label.position = Vector2(22, 12)
+	chapter_label.add_theme_font_size_override("font_size", 22)
+	chapter_label.add_theme_color_override("font_color", Color(1.0, 0.73, 0.26))
+	root.add_child(chapter_label)
+
 	hud_label = Label.new()
-	hud_label.position = Vector2(22, 18)
-	hud_label.add_theme_font_size_override("font_size", 23)
-	hud_label.add_theme_color_override("font_color", Color(0.9, 1.0, 0.88))
+	hud_label.position = Vector2(22, 42)
+	hud_label.add_theme_font_size_override("font_size", 18)
+	hud_label.add_theme_color_override("font_color", Color(0.92, 1.0, 0.91))
 	root.add_child(hud_label)
 
 	message_label = Label.new()
 	message_label.anchor_left = 0.5
 	message_label.anchor_right = 0.5
-	message_label.anchor_top = 0.22
-	message_label.anchor_bottom = 0.22
-	message_label.offset_left = -250
-	message_label.offset_right = 250
-	message_label.offset_top = -30
-	message_label.offset_bottom = 40
+	message_label.anchor_top = 0.15
+	message_label.anchor_bottom = 0.15
+	message_label.offset_left = -300
+	message_label.offset_right = 300
+	message_label.offset_top = 0
+	message_label.offset_bottom = 55
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	message_label.add_theme_font_size_override("font_size", 28)
-	message_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	message_label.add_theme_font_size_override("font_size", 23)
+	message_label.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
 	root.add_child(message_label)
 
-	# Crosshair
 	var crosshair := Label.new()
 	crosshair.text = "+"
 	crosshair.anchor_left = 0.5
 	crosshair.anchor_right = 0.5
 	crosshair.anchor_top = 0.5
 	crosshair.anchor_bottom = 0.5
-	crosshair.offset_left = -12
-	crosshair.offset_right = 12
-	crosshair.offset_top = -20
-	crosshair.offset_bottom = 20
+	crosshair.offset_left = -14
+	crosshair.offset_right = 14
+	crosshair.offset_top = -22
+	crosshair.offset_bottom = 22
 	crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	crosshair.add_theme_font_size_override("font_size", 34)
-	crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	crosshair.add_theme_font_size_override("font_size", 36)
+	crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	root.add_child(crosshair)
 
-	joystick_base = ColorRect.new()
-	joystick_base.color = Color(0.65, 0.75, 0.8, 0.22)
-	joystick_base.size = Vector2(132, 132)
-	joystick_base.position = Vector2(34, -166)
+	joystick_base = Panel.new()
+	joystick_base.modulate = Color(0.7, 0.8, 0.85, 0.72)
+	joystick_base.size = Vector2(138, 138)
+	joystick_base.position = Vector2(32, -160)
 	joystick_base.anchor_top = 1
 	joystick_base.anchor_bottom = 1
 	root.add_child(joystick_base)
-
-	joystick_knob = ColorRect.new()
-	joystick_knob.color = Color(0.85, 0.92, 0.96, 0.55)
+	joystick_knob = Panel.new()
+	joystick_knob.modulate = Color(0.95, 0.98, 1.0, 0.9)
 	joystick_knob.size = Vector2(58, 58)
-	joystick_knob.position = Vector2(37, 37)
+	joystick_knob.position = Vector2(40, 40)
 	joystick_base.add_child(joystick_knob)
 
-	fire_button = Button.new()
-	fire_button.text = "TEMBAK"
-	fire_button.size = Vector2(112, 72)
-	fire_button.position = Vector2(-145, -112)
-	fire_button.anchor_left = 1
-	fire_button.anchor_right = 1
-	fire_button.anchor_top = 1
-	fire_button.anchor_bottom = 1
-	fire_button.add_theme_font_size_override("font_size", 19)
+	fire_button = _make_button(root, "TEMBAK", Vector2(116, 70), Vector2(-135, -90))
 	fire_button.pressed.connect(_shoot)
-	root.add_child(fire_button)
-
-	reload_button = Button.new()
-	reload_button.text = "RELOAD"
-	reload_button.size = Vector2(100, 52)
-	reload_button.position = Vector2(-158, -194)
-	reload_button.anchor_left = 1
-	reload_button.anchor_right = 1
-	reload_button.anchor_top = 1
-	reload_button.anchor_bottom = 1
+	reload_button = _make_button(root, "RELOAD", Vector2(104, 52), Vector2(-250, -76))
 	reload_button.pressed.connect(_reload)
-	root.add_child(reload_button)
+	shop_button = _make_button(root, "KEDAI", Vector2(110, 52), Vector2(-135, -160))
+	shop_button.pressed.connect(_toggle_shop)
 
-	restart_button = Button.new()
-	restart_button.text = "MAIN SEMULA"
-	restart_button.size = Vector2(200, 62)
+	restart_button = _make_button(root, "MAIN SEMULA", Vector2(200, 62), Vector2(-100, 0))
 	restart_button.anchor_left = 0.5
 	restart_button.anchor_right = 0.5
 	restart_button.anchor_top = 0.58
 	restart_button.anchor_bottom = 0.58
-	restart_button.offset_left = -100
-	restart_button.offset_right = 100
-	restart_button.offset_top = 0
-	restart_button.offset_bottom = 62
 	restart_button.visible = false
 	restart_button.pressed.connect(_restart_game)
-	root.add_child(restart_button)
+
+	shop_panel = Panel.new()
+	shop_panel.anchor_left = 0.5
+	shop_panel.anchor_right = 0.5
+	shop_panel.anchor_top = 0.5
+	shop_panel.anchor_bottom = 0.5
+	shop_panel.offset_left = -235
+	shop_panel.offset_right = 235
+	shop_panel.offset_top = -180
+	shop_panel.offset_bottom = 180
+	shop_panel.visible = false
+	root.add_child(shop_panel)
+
+	var shop_title := Label.new()
+	shop_title.text = "KEDAI SENJATA"
+	shop_title.position = Vector2(20, 12)
+	shop_title.add_theme_font_size_override("font_size", 25)
+	shop_panel.add_child(shop_title)
+
+	upgrade_button = Button.new()
+	upgrade_button.text = "UPGRADE DAMAGE"
+	upgrade_button.position = Vector2(20, 58)
+	upgrade_button.size = Vector2(420, 46)
+	upgrade_button.pressed.connect(_upgrade_damage)
+	shop_panel.add_child(upgrade_button)
+
+	smg_button = Button.new()
+	smg_button.text = "BELI SMG — 250 KOIN"
+	smg_button.position = Vector2(20, 112)
+	smg_button.size = Vector2(420, 46)
+	smg_button.pressed.connect(_buy_smg)
+	shop_panel.add_child(smg_button)
+
+	rifle_button = Button.new()
+	rifle_button.text = "BELI RIFLE — 500 KOIN"
+	rifle_button.position = Vector2(20, 166)
+	rifle_button.size = Vector2(420, 46)
+	rifle_button.pressed.connect(_buy_rifle)
+	shop_panel.add_child(rifle_button)
+
+	var close_button := Button.new()
+	close_button.text = "TUTUP"
+	close_button.position = Vector2(340, 8)
+	close_button.size = Vector2(100, 38)
+	close_button.pressed.connect(_toggle_shop)
+	shop_panel.add_child(close_button)
+	_refresh_shop()
+
+func _make_button(parent: Control, text_value: String, button_size: Vector2, offset: Vector2) -> Button:
+	var b := Button.new()
+	b.text = text_value
+	b.size = button_size
+	b.position = offset
+	b.anchor_left = 1
+	b.anchor_right = 1
+	b.anchor_top = 1
+	b.anchor_bottom = 1
+	b.add_theme_font_size_override("font_size", 17)
+	parent.add_child(b)
+	return b
 
 func _process(delta: float) -> void:
-	if game_over:
+	if game_over or victory:
 		return
 	fire_cooldown = maxf(0.0, fire_cooldown - delta)
 	if reload_timer > 0.0:
 		reload_timer -= delta
 		if reload_timer <= 0.0:
-			var needed := MAGAZINE_SIZE - ammo
+			var needed := magazine_size - ammo
 			var loaded := mini(needed, reserve_ammo)
 			ammo += loaded
 			reserve_ammo -= loaded
 			message_label.text = ""
-	_update_hud()
 	_update_zombies(delta)
+	_update_hud()
 
 func _physics_process(delta: float) -> void:
-	if game_over:
+	if game_over or victory or shop_open:
+		player.velocity = Vector3.ZERO
 		return
 	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var direction := Vector3.ZERO
-	direction += player.global_transform.basis.z * keyboard.y
-	direction += player.global_transform.basis.x * keyboard.x
-	direction += player.global_transform.basis.z * move_vector.y
-	direction += player.global_transform.basis.x * move_vector.x
+	var direction := player.global_transform.basis.x * keyboard.x - player.global_transform.basis.z * keyboard.y
+	direction += player.global_transform.basis.x * move_vector.x - player.global_transform.basis.z * move_vector.y
 	direction.y = 0
-	if direction.length() > 1:
+	if direction.length() > 1.0:
 		direction = direction.normalized()
 	player.velocity.x = direction.x * PLAYER_SPEED
 	player.velocity.z = direction.z * PLAYER_SPEED
@@ -336,19 +438,21 @@ func _update_zombies(delta: float) -> void:
 		var to_player := player.global_position - zombie.global_position
 		to_player.y = 0
 		var distance := to_player.length()
-		if distance > 1.35:
+		var is_boss := bool(zombie.get_meta("boss", false))
+		if distance > (1.75 if is_boss else 1.25):
 			var direction := to_player.normalized()
-			zombie.velocity.x = direction.x * (1.45 + minf(float(score) * 0.015, 1.0))
-			zombie.velocity.z = direction.z * (1.45 + minf(float(score) * 0.015, 1.0))
+			var speed := float(zombie.get_meta("speed", 1.5))
+			zombie.velocity.x = direction.x * speed
+			zombie.velocity.z = direction.z * speed
 			zombie.look_at(Vector3(player.global_position.x, zombie.global_position.y, player.global_position.z), Vector3.UP)
 		else:
 			zombie.velocity.x = 0
 			zombie.velocity.z = 0
-			var attack_timer := float(zombie.get_meta("attack_timer")) - delta
+			var attack_timer := float(zombie.get_meta("attack_timer", 0.7)) - delta
 			if attack_timer <= 0.0:
-				hp -= 8
-				attack_timer = 1.0
-				message_label.text = "ZOMBIE MENYERANG!"
+				hp -= 22 if is_boss else 8
+				attack_timer = 1.0 if is_boss else 1.2
+				message_label.text = "HILMI JR PRO ZOMBIE MENYERANG!" if is_boss else "ZOMBIE MENYERANG!"
 			zombie.set_meta("attack_timer", attack_timer)
 		if not zombie.is_on_floor():
 			zombie.velocity.y -= 20.0 * delta
@@ -359,81 +463,173 @@ func _update_zombies(delta: float) -> void:
 		_end_game()
 
 func _shoot() -> void:
-	if game_over or fire_cooldown > 0.0 or reload_timer > 0.0:
+	if game_over or victory or shop_open or fire_cooldown > 0.0 or reload_timer > 0.0:
 		return
 	if ammo <= 0:
 		message_label.text = "PELURU HABIS — TEKAN RELOAD"
 		return
 	ammo -= 1
-	fire_cooldown = 0.22
-	gun.position.z = -0.48
-	var from := camera.global_position
-	var to := from + (-camera.global_transform.basis.z * 45.0)
-	var query := PhysicsRayQueryParameters3D.create(from, to)
+	fire_cooldown = fire_rate
+	if is_instance_valid(gun):
+		gun.position.z = -0.48
+	var from_pos := camera.global_position
+	var to_pos := from_pos + (-camera.global_transform.basis.z * 60.0)
+	var query := PhysicsRayQueryParameters3D.create(from_pos, to_pos)
 	query.exclude = [player.get_rid()]
 	var result := get_world_3d().direct_space_state.intersect_ray(query)
 	if not result.is_empty():
 		var hit := result.get("collider") as Node
-		var zombie := hit
-		while zombie != null and not zombie.has_meta("hp"):
-			zombie = zombie.get_parent()
-		if zombie != null and zombie.has_meta("hp"):
-			var remaining := int(zombie.get_meta("hp")) - 50
-			zombie.set_meta("hp", remaining)
+		var target: Node = hit
+		while target != null and not target.has_meta("hp"):
+			target = target.get_parent()
+		if target != null and target.has_meta("hp"):
+			var remaining := int(target.get_meta("hp")) - damage
+			target.set_meta("hp", remaining)
 			if remaining <= 0:
-				score += 100
-				zombies.erase(zombie)
-				zombie.queue_free()
-				if zombies.is_empty():
-					wave += 1
-					for i in range(mini(5 + wave * 2, 18)):
-						var angle := rng.randf_range(0, TAU)
-						var radius := rng.randf_range(12, 22)
-						_spawn_zombie(player.global_position + Vector3(cos(angle) * radius, 0, sin(angle) * radius))
-					message_label.text = "WAVE %d — ZOMBIE BAHARU!" % wave
+				var is_boss := bool(target.get_meta("boss", false))
+				score += 500 if is_boss else 100
+				coins += 500 if is_boss else 25
+				zombies.erase(target)
+				target.queue_free()
+				if is_boss:
+					victory = true
+					message_label.text = "BOSS TUMBANG! MISI SELESAI!\n+500 KOIN"
+					restart_button.visible = true
 				else:
-					message_label.text = "ZOMBIE TUMBANG! +100"
+					message_label.text = "ZOMBIE TUMBANG! +25 KOIN"
+					if zombies.is_empty():
+						if wave < MAX_WAVES:
+							wave += 1
+							_spawn_wave()
+						else:
+							victory = true
+							message_label.text = "SEMUA BABAK SELESAI!"
+							restart_button.visible = true
 			else:
-				message_label.text = "KENA! TEMBAK LAGI"
+				message_label.text = "KENA! HP MUSUH: %d" % remaining
 	else:
 		message_label.text = ""
 	_update_hud()
 
 func _reload() -> void:
-	if game_over or reload_timer > 0.0 or ammo == MAGAZINE_SIZE or reserve_ammo <= 0:
+	if game_over or victory or reload_timer > 0.0 or ammo >= magazine_size or reserve_ammo <= 0:
 		return
 	reload_timer = RELOAD_SECONDS
 	message_label.text = "SEDANG RELOAD..."
 
+func _toggle_shop() -> void:
+	if game_over or victory:
+		return
+	shop_open = not shop_open
+	shop_panel.visible = shop_open
+	_refresh_shop()
+
+func _upgrade_damage() -> void:
+	var cost := 100 + damage_level * 100
+	if coins < cost:
+		message_label.text = "KOIN TAK CUKUP! PERLU %d" % cost
+		return
+	coins -= cost
+	damage_level += 1
+	damage += 15
+	_refresh_shop()
+	message_label.text = "DAMAGE NAIK KE %d!" % damage
+	_update_hud()
+
+func _buy_smg() -> void:
+	if weapon_tier >= 1:
+		message_label.text = "SMG SUDAH DIMILIKI"
+		return
+	if coins < 250:
+		message_label.text = "PERLU 250 KOIN UNTUK SMG"
+		return
+	coins -= 250
+	weapon_tier = 1
+	damage = maxi(damage, 38)
+	fire_rate = 0.12
+	magazine_size = 30
+	ammo = magazine_size
+	reserve_ammo += 120
+	_refresh_gun()
+	_refresh_shop()
+	_update_hud()
+	message_label.text = "SMG DIBELI!"
+
+func _buy_rifle() -> void:
+	if weapon_tier >= 2:
+		message_label.text = "RIFLE SUDAH DIMILIKI"
+		return
+	if coins < 500:
+		message_label.text = "PERLU 500 KOIN UNTUK RIFLE"
+		return
+	coins -= 500
+	weapon_tier = 2
+	damage = maxi(damage, 100)
+	fire_rate = 0.42
+	magazine_size = 8
+	ammo = magazine_size
+	reserve_ammo += 48
+	_refresh_gun()
+	_refresh_shop()
+	_update_hud()
+	message_label.text = "RIFLE DIBELI!"
+
+func _refresh_gun() -> void:
+	if not is_instance_valid(gun):
+		return
+	var mesh := BoxMesh.new()
+	if weapon_tier == 1:
+		mesh.size = Vector3(0.22, 0.19, 0.76)
+	elif weapon_tier == 2:
+		mesh.size = Vector3(0.25, 0.22, 0.98)
+	else:
+		mesh.size = Vector3(0.20, 0.16, 0.62)
+	gun.mesh = mesh
+	var mat := _make_mat(Color(0.11, 0.16, 0.13) if weapon_tier == 1 else (Color(0.20, 0.20, 0.22) if weapon_tier == 2 else Color(0.07, 0.08, 0.09)))
+	gun.material_override = mat
+
+func _refresh_shop() -> void:
+	if not is_instance_valid(upgrade_button):
+		return
+	upgrade_button.text = "UPGRADE DAMAGE +15 — %d KOIN" % (100 + damage_level * 100)
+	smg_button.text = "SMG: DIMILIKI" if weapon_tier >= 1 else "BELI SMG — 250 KOIN"
+	rifle_button.text = "RIFLE: DIMILIKI" if weapon_tier >= 2 else "BELI RIFLE — 500 KOIN"
+	upgrade_button.disabled = coins < (100 + damage_level * 100)
+	smg_button.disabled = weapon_tier >= 1 or coins < 250
+	rifle_button.disabled = weapon_tier >= 2 or coins < 500
+
 func _update_hud() -> void:
-	if hud_label:
-		hud_label.text = "HP %d   |   PELURU %d/%d   |   SKOR %d   |   WAVE %d" % [maxi(hp, 0), ammo, reserve_ammo, score, wave]
+	if is_instance_valid(hud_label):
+		var weapon_name := "PISTOL" if weapon_tier == 0 else ("SMG" if weapon_tier == 1 else "RIFLE")
+		hud_label.text = "HP %d   |   %s   |   PELURU %d/%d   |   KOIN %d   |   SKOR %d   |   WAVE %d" % [maxi(hp, 0), weapon_name, ammo, reserve_ammo, coins, score, wave]
+	_refresh_shop()
 
 func _end_game() -> void:
 	game_over = true
 	hp = 0
-	message_label.text = "GAME OVER\nSkor: %d" % score
+	message_label.text = "GAME OVER\nSkor: %d  |  Koin: %d" % [score, coins]
 	restart_button.visible = true
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if not OS.has_feature("mobile"):
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not game_over:
+	if event is InputEventMouseMotion and not OS.has_feature("mobile") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not game_over:
 		_rotate_view(event.relative)
 	elif event is InputEventScreenTouch:
 		var screen := get_viewport().get_visible_rect().size
 		if event.pressed:
-			if event.position.x < screen.x * 0.45 and move_touch == -1:
+			if event.position.x < screen.x * 0.43 and move_touch == -1 and event.position.y > screen.y * 0.2:
 				move_touch = event.index
 				move_origin = event.position
 				move_vector = Vector2.ZERO
-				joystick_base.position = event.position - Vector2(66, 66)
+				joystick_base.position = event.position - Vector2(69, 69)
 				joystick_base.anchor_top = 0
 				joystick_base.anchor_bottom = 0
-				joystick_knob.position = Vector2(37, 37)
-			elif event.position.x >= screen.x * 0.45:
+				joystick_knob.position = Vector2(40, 40)
+			elif event.position.x >= screen.x * 0.43 and event.position.y < screen.y * 0.78 and look_touch == -1:
 				look_touch = event.index
 				touch_look_last = event.position
 		else:
@@ -442,20 +638,20 @@ func _input(event: InputEvent) -> void:
 				move_vector = Vector2.ZERO
 				joystick_base.anchor_top = 1
 				joystick_base.anchor_bottom = 1
-				joystick_base.position = Vector2(34, -166)
-				joystick_knob.position = Vector2(37, 37)
+				joystick_base.position = Vector2(32, -160)
+				joystick_knob.position = Vector2(40, 40)
 			if event.index == look_touch:
 				look_touch = -1
 	elif event is InputEventScreenDrag:
 		if event.index == move_touch:
 			var offset := event.position - move_origin
-			var max_radius := 48.0
-			move_vector = Vector2(clampf(offset.x / max_radius, -1, 1), clampf(offset.y / max_radius, -1, 1))
-			joystick_knob.position = Vector2(37, 37) + Vector2(move_vector.x, move_vector.y) * 34.0
-		elif event.index == look_touch and not game_over:
+			var radius := 52.0
+			move_vector = Vector2(clampf(offset.x / radius, -1.0, 1.0), clampf(offset.y / radius, -1.0, 1.0))
+			joystick_knob.position = Vector2(40, 40) + Vector2(move_vector.x, move_vector.y) * 35.0
+		elif event.index == look_touch and not game_over and not shop_open:
 			_rotate_view(event.relative)
 
 func _rotate_view(relative: Vector2) -> void:
 	player.rotate_y(-relative.x * LOOK_SENSITIVITY)
-	pitch = clampf(pitch - relative.y * LOOK_SENSITIVITY, deg_to_rad(-75), deg_to_rad(75))
+	pitch = clampf(pitch - relative.y * LOOK_SENSITIVITY, deg_to_rad(-72), deg_to_rad(72))
 	camera.rotation.x = pitch
