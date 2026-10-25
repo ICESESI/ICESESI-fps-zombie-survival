@@ -53,6 +53,9 @@ var heal_charges := 3
 var bomb_charges := 2
 var jump_velocity := 8.0
 var muzzle_flash: MeshInstance3D
+var loot_pickups: Array[Node3D] = []
+var loot_hold_time := 0.0
+var loot_target: Node3D
 
 # Persistent player progression stored in Android app-private user:// storage.
 const SAVE_PATH := "user://fps_zombie_progress.cfg"
@@ -500,6 +503,72 @@ func _spawn_zombie(at_position: Vector3, is_boss := false) -> void:
 	add_child(zombie)
 	zombies.append(zombie)
 
+func _spawn_random_loot(at_position: Vector3) -> void:
+	var roll := rng.randi_range(0, 99)
+	var kind := "ammo" if roll < 50 else ("heal" if roll < 80 else "bomb")
+	var pickup := Node3D.new()
+	pickup.name = "Loot_" + kind
+	pickup.position = at_position + Vector3(rng.randf_range(-1.0, 1.0), -0.8, rng.randf_range(-1.0, 1.0))
+	pickup.set_meta("loot_kind", kind)
+	var mesh := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.55, 0.45, 0.55)
+	mesh.mesh = box
+	var color := Color(0.2, 0.65, 1.0) if kind == "ammo" else (Color(0.2, 1.0, 0.35) if kind == "heal" else Color(1.0, 0.35, 0.08))
+	mesh.material_override = _make_mat(color)
+	mesh.position.y = 0.3
+	pickup.add_child(mesh)
+	var tag := Label3D.new()
+	tag.text = "PELURU" if kind == "ammo" else ("HEAL" if kind == "heal" else "BOM")
+	tag.position.y = 1.0
+	tag.font_size = 32
+	tag.pixel_size = 0.009
+	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	pickup.add_child(tag)
+	add_child(pickup)
+	loot_pickups.append(pickup)
+
+func _update_loot_pickups(delta: float) -> void:
+	if not is_instance_valid(player):
+		return
+	var nearest: Node3D = null
+	var nearest_distance := 9999.0
+	for item in loot_pickups.duplicate():
+		if not is_instance_valid(item):
+			loot_pickups.erase(item)
+			continue
+		item.rotate_y(delta * 0.8)
+		var d := player.global_position.distance_to(item.global_position)
+		if d < 2.0 and d < nearest_distance:
+			nearest = item
+			nearest_distance = d
+	if nearest != loot_target:
+		loot_target = nearest
+		loot_hold_time = 0.0
+	if is_instance_valid(loot_target):
+		loot_hold_time += delta
+		message_label.text = "AMBIL %s... %.1f/1.0s" % [str(loot_target.get_meta("loot_kind", "ITEM")).to_upper(), minf(loot_hold_time, 1.0)]
+		if loot_hold_time >= 1.0:
+			var kind := str(loot_target.get_meta("loot_kind", "ammo"))
+			if kind == "ammo":
+				reserve_ammo += 24
+				message_label.text = "+24 PELURU"
+			elif kind == "heal":
+				heal_charges += 1
+				heal_button.text = "HEAL x%d" % heal_charges
+				message_label.text = "+1 HEAL"
+			else:
+				bomb_charges += 1
+				bomb_button.text = "BOM x%d" % bomb_charges
+				message_label.text = "+1 BOM"
+			loot_pickups.erase(loot_target)
+			loot_target.queue_free()
+			loot_target = null
+			loot_hold_time = 0.0
+			_update_hud()
+	else:
+		loot_hold_time = 0.0
+
 func _spawn_wave() -> void:
 	boss_spawned = false
 	if wave >= 3:
@@ -582,21 +651,7 @@ func _build_hud() -> void:
 	joystick_knob.position = Vector2(40, 40)
 	joystick_base.add_child(joystick_knob)
 
-	fire_button = _make_button(root, "TEMBAK", Vector2(100, 100), Vector2(-125, -105))
-	fire_button.add_theme_font_size_override("font_size", 16)
-	for state in ["normal", "hover", "pressed", "focus"]:
-		var style := StyleBoxFlat.new()
-		style.bg_color = Color(0.72, 0.12, 0.08, 0.92) if state != "pressed" else Color(0.95, 0.28, 0.10, 1.0)
-		style.corner_radius_top_left = 50
-		style.corner_radius_top_right = 50
-		style.corner_radius_bottom_left = 50
-		style.corner_radius_bottom_right = 50
-		style.border_width_left = 3
-		style.border_width_right = 3
-		style.border_width_top = 3
-		style.border_width_bottom = 3
-		style.border_color = Color(1.0, 0.72, 0.58, 0.95)
-		fire_button.add_theme_stylebox_override(state, style)
+	fire_button = _make_button(root, "TEMBAK", Vector2(116, 70), Vector2(-135, -90))
 	fire_button.pressed.connect(_shoot)
 	reload_button = _make_button(root, "RELOAD", Vector2(104, 52), Vector2(-250, -76))
 	reload_button.pressed.connect(_reload)
@@ -627,6 +682,7 @@ func _build_hud() -> void:
 	shop_panel.offset_top = -180
 	shop_panel.offset_bottom = 180
 	shop_panel.visible = false
+	shop_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(shop_panel)
 
 	var shop_title := Label.new()
@@ -657,6 +713,7 @@ func _build_hud() -> void:
 	shop_panel.add_child(rifle_button)
 
 	var close_button := Button.new()
+	close_button.name = "ShopCloseButton"
 	close_button.text = "TUTUP"
 	close_button.position = Vector2(340, 8)
 	close_button.size = Vector2(100, 38)
@@ -674,6 +731,7 @@ func _make_button(parent: Control, text_value: String, button_size: Vector2, off
 	b.anchor_top = 1
 	b.anchor_bottom = 1
 	b.add_theme_font_size_override("font_size", 17)
+	b.mouse_filter = Control.MOUSE_FILTER_STOP
 	parent.add_child(b)
 	return b
 
@@ -690,7 +748,9 @@ func _process(delta: float) -> void:
 			var loaded := mini(needed, reserve_ammo)
 			ammo += loaded
 			reserve_ammo -= loaded
-			message_label.text = ""
+			message_label.text = "RELOAD SELESAI" if loaded > 0 else "TIADA PELURU SIMPANAN"
+			_update_hud()
+	_update_loot_pickups(delta)
 	_update_zombies(delta)
 	_update_hud()
 
@@ -708,8 +768,8 @@ func _physics_process(delta: float) -> void:
 	player.velocity.z = direction.z * PLAYER_SPEED
 	if not player.is_on_floor():
 		player.velocity.y -= 22.0 * delta
-	else:
-		player.velocity.y = 0
+	elif player.velocity.y < 0.0:
+		player.velocity.y = 0.0
 	player.move_and_slide()
 
 
@@ -797,6 +857,7 @@ func _kill_zombie(target: Node) -> void:
 	_spawn_hit_effect(death_pos, Color(0.9, 0.05, 0.02))
 	score += 500 if is_boss else 100
 	coins += 500 if is_boss else 25
+	_spawn_random_loot(death_pos)
 	best_score = maxi(best_score, score)
 	_save_progress()
 	zombies.erase(target as CharacterBody3D)
@@ -997,35 +1058,6 @@ func _end_game() -> void:
 func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
-func _dispatch_mobile_button(pos: Vector2) -> bool:
-	# Start screen action.
-	if not started:
-		if is_instance_valid(start_button) and start_button.is_visible_in_tree():
-			if start_button.get_global_rect().has_point(pos):
-				_start_game()
-				return true
-		return false
-
-	# The shop overlay owns its own controls; let their native GUI events work.
-	if shop_open:
-		return false
-
-	var actions: Array = [
-		[fire_button, Callable(self, "_shoot")],
-		[reload_button, Callable(self, "_reload")],
-		[shop_button, Callable(self, "_toggle_shop")],
-		[jump_button, Callable(self, "_jump")],
-		[heal_button, Callable(self, "_use_heal")],
-		[bomb_button, Callable(self, "_throw_bomb")],
-		[restart_button, Callable(self, "_restart_game")]
-	]
-	for item in actions:
-		var control := item[0] as Control
-		if is_instance_valid(control) and control.is_visible_in_tree() and control.get_global_rect().has_point(pos):
-			(item[1] as Callable).call()
-			return true
-	return false
-
 func _touch_hits_ui(pos: Vector2) -> bool:
     var controls: Array[Control] = [
         fire_button, reload_button, shop_button,
@@ -1039,6 +1071,45 @@ func _touch_hits_ui(pos: Vector2) -> bool:
                 return true
     return false
 
+func _dispatch_mobile_ui_touch(pos: Vector2) -> bool:
+	var buttons: Array[Button] = [
+		fire_button, reload_button, shop_button, jump_button,
+		heal_button, bomb_button, restart_button,
+		upgrade_button, smg_button, rifle_button
+	]
+	if is_instance_valid(shop_panel):
+		for child in shop_panel.get_children():
+			if child is Button and child.name == "ShopCloseButton":
+				buttons.append(child as Button)
+	for button in buttons:
+		if not is_instance_valid(button) or not button.is_visible_in_tree() or button.disabled:
+			continue
+		if button.get_global_rect().has_point(pos):
+			if button == fire_button:
+				_shoot()
+			elif button == reload_button:
+				_reload()
+			elif button == shop_button:
+				_toggle_shop()
+			elif button == jump_button:
+				_jump()
+			elif button == heal_button:
+				_use_heal()
+			elif button == bomb_button:
+				_throw_bomb()
+			elif button == restart_button:
+				_restart_game()
+			elif button == upgrade_button:
+				_upgrade_damage()
+			elif button == smg_button:
+				_buy_smg()
+			elif button == rifle_button:
+				_buy_rifle()
+			else:
+				_toggle_shop()
+			return true
+	return false
+
 func _input(event: InputEvent) -> void:
 	# Android fallback: start game when the screen is touched inside the visible Start button.
 	if not started and event is InputEventScreenTouch and event.pressed:
@@ -1049,10 +1120,7 @@ func _input(event: InputEvent) -> void:
 				_start_game()
 				return
 	if event is InputEventScreenTouch and event.pressed:
-		# Dispatch mobile HUD actions directly from touch coordinates.
-		# This is a fallback for Android builds where dynamically-created
-		# Buttons do not consistently receive GUI pressed events.
-		if _dispatch_mobile_button(event.position):
+		if _dispatch_mobile_ui_touch(event.position):
 			get_viewport().set_input_as_handled()
 			return
 	if not started:
