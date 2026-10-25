@@ -55,20 +55,89 @@ var started := false
 var start_layer: CanvasLayer
 var start_level_label: Label
 var start_button: Button
+var debug_layer: CanvasLayer
+var debug_panel: Panel
+var debug_label: Label
+var debug_button: Button
+var debug_lines: Array[String] = []
+const DEBUG_LOG_PATH := "user://fps_zombie_debug.log"
 
 func _ready() -> void:
+	_debug_log("BOOT: _ready entered")
+	_build_debug_overlay()
+	_debug_log("BOOT: debug overlay created")
 	rng.randomize()
 	_load_progress()
-	# Force landscape while the game is running on Android.
+	_debug_log("BOOT: progress loaded")
 	if OS.has_feature("android"):
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_LANDSCAPE)
+		_debug_log("BOOT: landscape requested")
+	_debug_log("BOOT: building world")
 	_build_world()
+	_debug_log("BOOT: world built")
 	_build_player()
+	_debug_log("BOOT: player/camera built")
 	_build_hud()
+	_debug_log("BOOT: HUD built")
 	_build_start_screen()
+	_debug_log("BOOT: start screen built")
 	_update_hud()
 	if not OS.has_feature("mobile"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_debug_log("BOOT: ready complete")
+
+func _debug_log(line: String) -> void:
+	var stamp := Time.get_datetime_string_from_system()
+	var entry := "%s | %s" % [stamp, line]
+	debug_lines.append(entry)
+	if debug_lines.size() > 18:
+		debug_lines.pop_front()
+	var f := FileAccess.open(DEBUG_LOG_PATH, FileAccess.READ_WRITE)
+	if f == null:
+		f = FileAccess.open(DEBUG_LOG_PATH, FileAccess.WRITE)
+	if f != null:
+		f.seek_end()
+		f.store_line(entry)
+		f.close()
+	if is_instance_valid(debug_label):
+		var first := maxi(0, debug_lines.size() - 9)
+		debug_label.text = "FPS ZOMBIE DEBUG\\n" + "\\n".join(debug_lines.slice(first, debug_lines.size()))
+
+func _build_debug_overlay() -> void:
+	debug_layer = CanvasLayer.new()
+	debug_layer.name = "RuntimeDebug"
+	debug_layer.layer = 100
+	add_child(debug_layer)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_PASS
+	debug_layer.add_child(root)
+	debug_button = Button.new()
+	debug_button.text = "DEBUG"
+	debug_button.position = Vector2(12, 90)
+	debug_button.size = Vector2(92, 42)
+	debug_button.z_index = 100
+	debug_button.pressed.connect(_toggle_debug_panel)
+	root.add_child(debug_button)
+	debug_panel = Panel.new()
+	debug_panel.position = Vector2(12, 138)
+	debug_panel.size = Vector2(560, 300)
+	debug_panel.visible = false
+	debug_panel.z_index = 100
+	root.add_child(debug_panel)
+	debug_label = Label.new()
+	debug_label.position = Vector2(10, 8)
+	debug_label.size = Vector2(540, 282)
+	debug_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	debug_label.add_theme_font_size_override("font_size", 13)
+	debug_panel.add_child(debug_label)
+	_debug_log("DEBUG: overlay ready")
+
+func _toggle_debug_panel() -> void:
+	if is_instance_valid(debug_panel):
+		debug_panel.visible = not debug_panel.visible
+		if debug_panel.visible:
+			_debug_log("DEBUG: panel opened")
 
 func _load_progress() -> void:
 	var cfg := ConfigFile.new()
@@ -162,6 +231,7 @@ func _refresh_start_screen() -> void:
 		start_level_label.text = "LEVEL %d\nKoin tersimpan: %d\nRekod terbaik: %d\n\nSetiap level menambah jumlah, HP dan kelajuan zombie." % [persistent_level + 1, coins, best_score]
 
 func _start_game() -> void:
+	_debug_log("GAME: start pressed")
 	if started:
 		return
 	# Each new run advances the saved level and permanently raises difficulty.
@@ -169,6 +239,7 @@ func _start_game() -> void:
 	started = true
 	start_layer.visible = false
 	_spawn_wave()
+	_debug_log("GAME: first wave spawned, zombie_count=%d" % zombies.size())
 	_save_progress()
 	if not OS.has_feature("mobile"):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -733,6 +804,7 @@ func _update_hud() -> void:
 	_refresh_shop()
 
 func _end_game() -> void:
+	_debug_log("GAME: game over; score=%d coins=%d" % [score, coins])
 	game_over = true
 	best_score = maxi(best_score, score)
 	_save_progress()
