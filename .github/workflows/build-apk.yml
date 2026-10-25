@@ -79,6 +79,11 @@ jobs:
           echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
           echo "Godot project directory: $GITHUB_WORKSPACE"
 
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
+
       - name: Install Godot Android export templates
         shell: bash
         run: |
