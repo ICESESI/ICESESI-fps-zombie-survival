@@ -686,7 +686,7 @@ func _physics_process(delta: float) -> void:
 		return
 	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var direction := player.global_transform.basis.x * keyboard.x - player.global_transform.basis.z * keyboard.y
-	direction += player.global_transform.basis.x * move_vector.x - player.global_transform.basis.z * move_vector.y
+	direction += player.global_transform.basis.x * move_vector.x + player.global_transform.basis.z * move_vector.y
 	direction.y = 0
 	if direction.length() > 1.0:
 		direction = direction.normalized()
@@ -983,6 +983,19 @@ func _end_game() -> void:
 func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
+func _touch_hits_ui(pos: Vector2) -> bool:
+    var controls: Array[Control] = [
+        fire_button, reload_button, shop_button,
+        jump_button, heal_button, bomb_button,
+        restart_button, shop_panel, start_button,
+        debug_button
+    ]
+    for control in controls:
+        if is_instance_valid(control) and control.is_visible_in_tree():
+            if control.get_global_rect().has_point(pos):
+                return true
+    return false
+
 func _input(event: InputEvent) -> void:
 	# Android fallback: start game when the screen is touched inside the visible Start button.
 	if not started and event is InputEventScreenTouch and event.pressed:
@@ -999,6 +1012,9 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenTouch:
 		var screen := get_viewport().get_visible_rect().size
 		if event.pressed:
+			# Biarkan butang UI menerima sentuhan; jangan anggap ia kawalan kamera.
+			if _touch_hits_ui(event.position):
+				return
 			if event.position.x < screen.x * 0.43 and move_touch == -1 and event.position.y > screen.y * 0.2:
 				move_touch = event.index
 				move_origin = event.position
