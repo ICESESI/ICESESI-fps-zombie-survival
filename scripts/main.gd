@@ -46,6 +46,13 @@ var smg_button: Button
 var rifle_button: Button
 var shop_open := false
 var damage_level := 0
+var jump_button: Button
+var heal_button: Button
+var bomb_button: Button
+var heal_charges := 3
+var bomb_charges := 2
+var jump_velocity := 8.0
+var muzzle_flash: MeshInstance3D
 
 # Persistent player progression stored in Android app-private user:// storage.
 const SAVE_PATH := "user://fps_zombie_progress.cfg"
@@ -331,6 +338,58 @@ func _build_world() -> void:
 		prop.rotation.y = rng.randf_range(-0.5, 0.5)
 		add_child(prop)
 
+
+	# Low-cost trees and small ruined buildings make the arena feel less empty.
+	for i in range(10):
+		var x := rng.randf_range(-26.0, 26.0)
+		var z := rng.randf_range(-26.0, 26.0)
+		if Vector2(x, z).length() < 9.0:
+			continue
+		var tree := Node3D.new()
+		tree.position = Vector3(x, 0, z)
+		var trunk := MeshInstance3D.new()
+		var trunk_mesh := CylinderMesh.new()
+		trunk_mesh.top_radius = 0.22
+		trunk_mesh.bottom_radius = 0.34
+		trunk_mesh.height = 2.2
+		trunk.mesh = trunk_mesh
+		trunk.position.y = 1.1
+		trunk.material_override = _make_mat(Color(0.24, 0.14, 0.08))
+		tree.add_child(trunk)
+		var leaves := MeshInstance3D.new()
+		var leaf_mesh := SphereMesh.new()
+		leaf_mesh.radius = 1.15
+		leaf_mesh.height = 2.2
+		leaves.mesh = leaf_mesh
+		leaves.position.y = 2.65
+		leaves.material_override = _make_mat(Color(0.12, 0.28 + rng.randf() * 0.12, 0.13))
+		tree.add_child(leaves)
+		add_child(tree)
+	for i in range(4):
+		var house := StaticBody3D.new()
+		var building := MeshInstance3D.new()
+		var building_mesh := BoxMesh.new()
+		building_mesh.size = Vector3(4.5, 3.2, 4.0)
+		building.mesh = building_mesh
+		building.material_override = _make_mat(Color(0.27, 0.25, 0.22))
+		building.position.y = 1.6
+		house.add_child(building)
+		var roof := MeshInstance3D.new()
+		var roof_mesh := BoxMesh.new()
+		roof_mesh.size = Vector3(5.0, 0.35, 4.5)
+		roof.mesh = roof_mesh
+		roof.material_override = _make_mat(Color(0.16, 0.17, 0.18))
+		roof.position.y = 3.35
+		house.add_child(roof)
+		var house_col := CollisionShape3D.new()
+		var house_shape := BoxShape3D.new()
+		house_shape.size = Vector3(4.5, 3.2, 4.0)
+		house_col.shape = house_shape
+		house_col.position.y = 1.6
+		house.add_child(house_col)
+		house.position = Vector3([-22.0, 22.0, -22.0, 22.0][i], 0, [-20.0, -20.0, 20.0, 20.0][i])
+		add_child(house)
+
 func _build_player() -> void:
 	player = CharacterBody3D.new()
 	player.name = "Player"
@@ -428,6 +487,15 @@ func _spawn_zombie(at_position: Vector3, is_boss := false) -> void:
 	collision.shape = shape
 	collision.position.y = 0.95 if is_boss else 0.82
 	zombie.add_child(collision)
+	var hp_tag := Label3D.new()
+	hp_tag.name = "HPTag"
+	hp_tag.text = "BOSS %d HP" % zombie_hp if is_boss else "%d HP" % zombie_hp
+	hp_tag.position = Vector3(0, 2.35 if is_boss else 2.05, 0)
+	hp_tag.font_size = 48
+	hp_tag.pixel_size = 0.008
+	hp_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	hp_tag.modulate = Color(1.0, 0.25, 0.2)
+	zombie.add_child(hp_tag)
 
 	add_child(zombie)
 	zombies.append(zombie)
@@ -520,6 +588,12 @@ func _build_hud() -> void:
 	reload_button.pressed.connect(_reload)
 	shop_button = _make_button(root, "KEDAI", Vector2(110, 52), Vector2(-135, -160))
 	shop_button.pressed.connect(_toggle_shop)
+	jump_button = _make_button(root, "LOMPAT", Vector2(104, 48), Vector2(-260, -145))
+	jump_button.pressed.connect(_jump)
+	heal_button = _make_button(root, "HEAL x3", Vector2(104, 48), Vector2(-380, -145))
+	heal_button.pressed.connect(_use_heal)
+	bomb_button = _make_button(root, "BOM x2", Vector2(104, 48), Vector2(-380, -85))
+	bomb_button.pressed.connect(_throw_bomb)
 
 	restart_button = _make_button(root, "MAIN SEMULA", Vector2(200, 62), Vector2(-100, 0))
 	restart_button.anchor_left = 0.5
@@ -593,6 +667,8 @@ func _process(delta: float) -> void:
 	if not started or game_over or victory:
 		return
 	fire_cooldown = maxf(0.0, fire_cooldown - delta)
+	if is_instance_valid(gun):
+		gun.position.z = move_toward(gun.position.z, -0.68, delta * 1.8)
 	if reload_timer > 0.0:
 		reload_timer -= delta
 		if reload_timer <= 0.0:
@@ -621,6 +697,110 @@ func _physics_process(delta: float) -> void:
 	else:
 		player.velocity.y = 0
 	player.move_and_slide()
+
+
+func _jump() -> void:
+	if not started or game_over or victory or shop_open:
+		return
+	if player.is_on_floor():
+		player.velocity.y = jump_velocity
+		message_label.text = "LOMPAT!"
+
+func _use_heal() -> void:
+	if not started or game_over or victory or shop_open:
+		return
+	if heal_charges <= 0:
+		message_label.text = "HEAL HABIS!"
+		return
+	if hp >= 100:
+		message_label.text = "HP MASIH PENUH"
+		return
+	heal_charges -= 1
+	hp = mini(100, hp + 40)
+	heal_button.text = "HEAL x%d" % heal_charges
+	message_label.text = "+40 HP"
+	_update_hud()
+
+func _throw_bomb() -> void:
+	if not started or game_over or victory or shop_open:
+		return
+	if bomb_charges <= 0:
+		message_label.text = "BOM HABIS!"
+		return
+	bomb_charges -= 1
+	bomb_button.text = "BOM x%d" % bomb_charges
+	var blast_center := player.global_position + (-camera.global_transform.basis.z * 7.0)
+	_spawn_blast(blast_center)
+	for zombie in zombies.duplicate():
+		if is_instance_valid(zombie) and zombie.global_position.distance_to(blast_center) <= 7.0:
+			var remaining := int(zombie.get_meta("hp", 100)) - 180
+			zombie.set_meta("hp", remaining)
+			if remaining <= 0:
+				_kill_zombie(zombie)
+			else:
+				message_label.text = "LETUPAN! HP ZOMBIE: %d" % remaining
+	_update_hud()
+
+func _spawn_blast(at_position: Vector3) -> void:
+	var blast := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	blast.mesh = sphere
+	blast.position = at_position + Vector3(0, 0.8, 0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.32, 0.04, 0.8)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	blast.material_override = mat
+	add_child(blast)
+	var tween := create_tween()
+	tween.tween_property(blast, "scale", Vector3(8, 8, 8), 0.32)
+	tween.tween_callback(blast.queue_free)
+
+func _spawn_hit_effect(at_position: Vector3, color := Color(1.0, 0.18, 0.06)) -> void:
+	var effect := MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.16
+	mesh.height = 0.32
+	effect.mesh = mesh
+	effect.position = at_position
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	effect.material_override = mat
+	add_child(effect)
+	var tween := create_tween()
+	tween.tween_property(effect, "scale", Vector3(2.5, 2.5, 2.5), 0.18)
+	tween.tween_callback(effect.queue_free)
+
+func _kill_zombie(target: Node) -> void:
+	if not is_instance_valid(target):
+		return
+	var is_boss := bool(target.get_meta("boss", false))
+	var death_pos: Vector3 = target.global_position + Vector3(0, 1.0, 0)
+	_spawn_hit_effect(death_pos, Color(0.9, 0.05, 0.02))
+	score += 500 if is_boss else 100
+	coins += 500 if is_boss else 25
+	best_score = maxi(best_score, score)
+	_save_progress()
+	zombies.erase(target as CharacterBody3D)
+	target.queue_free()
+	if is_boss:
+		victory = true
+		message_label.text = "BOSS TUMBANG! MISI SELESAI! +500 KOIN"
+		restart_button.visible = true
+	elif zombies.is_empty():
+		if wave < MAX_WAVES:
+			wave += 1
+			_spawn_wave()
+		else:
+			victory = true
+			message_label.text = "SEMUA BABAK SELESAI!"
+			restart_button.visible = true
+	else:
+		message_label.text = "ZOMBIE TUMBANG! +25 KOIN"
 
 func _update_zombies(delta: float) -> void:
 	for zombie in zombies.duplicate():
@@ -664,6 +844,7 @@ func _shoot() -> void:
 	fire_cooldown = fire_rate
 	if is_instance_valid(gun):
 		gun.position.z = -0.48
+		_spawn_hit_effect(camera.global_position + (-camera.global_transform.basis.z * 1.15) + camera.global_transform.basis.x * 0.34 + Vector3(0, -0.28, 0), Color(1.0, 0.68, 0.12))
 	var from_pos := camera.global_position
 	var to_pos := from_pos + (-camera.global_transform.basis.z * 60.0)
 	var query := PhysicsRayQueryParameters3D.create(from_pos, to_pos)
@@ -677,34 +858,14 @@ func _shoot() -> void:
 		if target != null and target.has_meta("hp"):
 			var remaining := int(target.get_meta("hp")) - damage
 			target.set_meta("hp", remaining)
+			var hp_tag := target.get_node_or_null("HPTag") as Label3D
+			if is_instance_valid(hp_tag):
+				hp_tag.text = "%d/%d HP" % [maxi(remaining, 0), int(target.get_meta("max_hp", 100))]
+			_spawn_hit_effect(result.get("position", target.global_position), Color(1.0, 0.25, 0.05))
 			if remaining <= 0:
-				var is_boss := bool(target.get_meta("boss", false))
-				score += 500 if is_boss else 100
-				coins += 500 if is_boss else 25
-				best_score = maxi(best_score, score)
-				_save_progress()
-				zombies.erase(target)
-				target.queue_free()
-				if is_boss:
-					victory = true
-					best_score = maxi(best_score, score)
-					_save_progress()
-					message_label.text = "BOSS TUMBANG! MISI SELESAI!\n+500 KOIN"
-					restart_button.visible = true
-				else:
-					message_label.text = "ZOMBIE TUMBANG! +25 KOIN"
-					if zombies.is_empty():
-						if wave < MAX_WAVES:
-							wave += 1
-							_spawn_wave()
-						else:
-							victory = true
-							best_score = maxi(best_score, score)
-							_save_progress()
-							message_label.text = "SEMUA BABAK SELESAI!"
-							restart_button.visible = true
+				_kill_zombie(target)
 			else:
-				message_label.text = "KENA! HP MUSUH: %d" % remaining
+				message_label.text = "KENA! HP ZOMBIE: %d/%d" % [remaining, int(target.get_meta("max_hp", 100))]
 	else:
 		message_label.text = ""
 	_update_hud()
@@ -802,12 +963,15 @@ func _refresh_shop() -> void:
 func _update_hud() -> void:
 	if is_instance_valid(hud_label):
 		var weapon_name := "PISTOL" if weapon_tier == 0 else ("SMG" if weapon_tier == 1 else "RIFLE")
-		hud_label.text = "HP %d   |   %s   |   PELURU %d/%d   |   KOIN %d   |   SKOR %d   |   WAVE %d" % [maxi(hp, 0), weapon_name, ammo, reserve_ammo, coins, score, wave]
+		hud_label.text = "HP %d   |   %s   |   PELURU %d/%d   |   KOIN %d   |   SKOR %d   |   WAVE %d   |   HEAL %d BOM %d" % [maxi(hp, 0), weapon_name, ammo, reserve_ammo, coins, score, wave, heal_charges, bomb_charges]
 	_refresh_shop()
 
 func _end_game() -> void:
 	_debug_log("GAME: game over; score=%d coins=%d" % [score, coins])
 	game_over = true
+	shop_open = false
+	if is_instance_valid(shop_panel):
+		shop_panel.visible = false
 	best_score = maxi(best_score, score)
 	_save_progress()
 	hp = 0
@@ -820,15 +984,14 @@ func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
 func _input(event: InputEvent) -> void:
-    # Android fallback: start game when the screen is touched
-    # inside the visible Start button.
-    if not started and event is InputEventScreenTouch and event.pressed:
-        if is_instance_valid(start_button) and start_button.visible:
-            var button_rect: Rect2 = start_button.get_global_rect()
-            if button_rect.has_point(event.position):
-                get_viewport().set_input_as_handled()
-                _start_game()
-                return
+	# Android fallback: start game when the screen is touched inside the visible Start button.
+	if not started and event is InputEventScreenTouch and event.pressed:
+		if is_instance_valid(start_button) and start_button.visible:
+			var button_rect: Rect2 = start_button.get_global_rect()
+			if button_rect.has_point(event.position):
+				get_viewport().set_input_as_handled()
+				_start_game()
+				return
 	if not started:
 		return
 	if event is InputEventMouseMotion and not OS.has_feature("mobile") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not game_over:
