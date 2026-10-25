@@ -820,6 +820,15 @@ func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
 func _input(event: InputEvent) -> void:
+    # Android fallback: start game when the screen is touched
+    # inside the visible Start button.
+    if not started and event is InputEventScreenTouch and event.pressed:
+        if is_instance_valid(start_button) and start_button.visible:
+            var button_rect: Rect2 = start_button.get_global_rect()
+            if button_rect.has_point(event.position):
+                get_viewport().set_input_as_handled()
+                _start_game()
+                return
 	if not started:
 		return
 	if event is InputEventMouseMotion and not OS.has_feature("mobile") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not game_over:
