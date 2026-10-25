@@ -47,12 +47,129 @@ var rifle_button: Button
 var shop_open := false
 var damage_level := 0
 
+# Persistent player progression stored in Android app-private user:// storage.
+const SAVE_PATH := "user://fps_zombie_progress.cfg"
+var persistent_level := 0
+var best_score := 0
+var started := false
+var start_layer: CanvasLayer
+var start_level_label: Label
+var start_button: Button
+
 func _ready() -> void:
 	rng.randomize()
+	_load_progress()
+	# Force landscape while the game is running on Android.
+	if OS.has_feature("android"):
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_LANDSCAPE)
 	_build_world()
 	_build_player()
 	_build_hud()
+	_build_start_screen()
+	_update_hud()
+	if not OS.has_feature("mobile"):
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _load_progress() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SAVE_PATH) == OK:
+		persistent_level = maxi(0, int(cfg.get_value("progress", "level", 0)))
+		coins = maxi(0, int(cfg.get_value("progress", "coins", 0)))
+		best_score = maxi(0, int(cfg.get_value("progress", "best_score", 0)))
+		damage_level = maxi(0, int(cfg.get_value("progress", "damage_level", 0)))
+		weapon_tier = clampi(int(cfg.get_value("progress", "weapon_tier", 0)), 0, 2)
+		damage = 50 + damage_level * 15
+		if weapon_tier == 1:
+			damage = maxi(damage, 38)
+			fire_rate = 0.12
+			magazine_size = 30
+			reserve_ammo = 120
+		elif weapon_tier == 2:
+			damage = maxi(damage, 100)
+			fire_rate = 0.42
+			magazine_size = 8
+			reserve_ammo = 48
+		ammo = magazine_size
+
+func _save_progress() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("progress", "level", persistent_level)
+	cfg.set_value("progress", "coins", coins)
+	cfg.set_value("progress", "best_score", best_score)
+	cfg.set_value("progress", "damage_level", damage_level)
+	cfg.set_value("progress", "weapon_tier", weapon_tier)
+	var err := cfg.save(SAVE_PATH)
+	if err != OK:
+		push_warning("Progress save failed: %s" % error_string(err))
+
+func _build_start_screen() -> void:
+	start_layer = CanvasLayer.new()
+	start_layer.name = "StartScreen"
+	start_layer.layer = 10
+	add_child(start_layer)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	start_layer.add_child(root)
+	var shade := ColorRect.new()
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.color = Color(0.015, 0.025, 0.03, 0.94)
+	root.add_child(shade)
+	var panel := Panel.new()
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -260
+	panel.offset_right = 260
+	panel.offset_top = -205
+	panel.offset_bottom = 205
+	root.add_child(panel)
+	var title := Label.new()
+	title.text = "FPS ZOMBIE SURVIVAL"
+	title.position = Vector2(20, 22)
+	title.size = Vector2(480, 48)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 29)
+	title.add_theme_color_override("font_color", Color(1.0, 0.28, 0.18))
+	panel.add_child(title)
+	start_level_label = Label.new()
+	start_level_label.position = Vector2(28, 90)
+	start_level_label.size = Vector2(464, 110)
+	start_level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	start_level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	start_level_label.add_theme_font_size_override("font_size", 21)
+	start_level_label.add_theme_color_override("font_color", Color(0.93, 0.96, 0.9))
+	panel.add_child(start_level_label)
+	start_button = Button.new()
+	start_button.text = "MULA BERMAIN"
+	start_button.position = Vector2(75, 225)
+	start_button.size = Vector2(370, 58)
+	start_button.add_theme_font_size_override("font_size", 23)
+	start_button.pressed.connect(_start_game)
+	panel.add_child(start_button)
+	var note := Label.new()
+	note.text = "Kawal dengan joystick kiri • Lihat dengan seret kanan\nBunuh zombie untuk dapat koin dan upgrade senjata"
+	note.position = Vector2(20, 300)
+	note.size = Vector2(480, 70)
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 14)
+	note.add_theme_color_override("font_color", Color(0.75, 0.82, 0.8))
+	panel.add_child(note)
+	_refresh_start_screen()
+
+func _refresh_start_screen() -> void:
+	if is_instance_valid(start_level_label):
+		start_level_label.text = "LEVEL %d\nKoin tersimpan: %d\nRekod terbaik: %d\n\nSetiap level menambah jumlah, HP dan kelajuan zombie." % [persistent_level + 1, coins, best_score]
+
+func _start_game() -> void:
+	if started:
+		return
+	# Each new run advances the saved level and permanently raises difficulty.
+	persistent_level += 1
+	started = true
+	start_layer.visible = false
 	_spawn_wave()
+	_save_progress()
 	if not OS.has_feature("mobile"):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_update_hud()
@@ -186,11 +303,13 @@ func _spawn_zombie(at_position: Vector3, is_boss := false) -> void:
 	var zombie := CharacterBody3D.new()
 	zombie.name = "HilmiJrProZombie" if is_boss else "Zombie"
 	zombie.position = at_position
-	zombie.set_meta("hp", 1400 if is_boss else 100)
-	zombie.set_meta("max_hp", 1400 if is_boss else 100)
+	var difficulty := 1.0 + float(persistent_level - 1) * 0.22
+	var zombie_hp := int((1400 if is_boss else 100) * difficulty)
+	zombie.set_meta("hp", zombie_hp)
+	zombie.set_meta("max_hp", zombie_hp)
 	zombie.set_meta("attack_timer", 0.7)
 	zombie.set_meta("boss", is_boss)
-	zombie.set_meta("speed", 1.0 if is_boss else rng.randf_range(1.25, 1.8))
+	zombie.set_meta("speed", (1.0 if is_boss else rng.randf_range(1.25, 1.8)) * (1.0 + float(persistent_level - 1) * 0.06))
 
 	var body := MeshInstance3D.new()
 	if is_boss:
@@ -246,12 +365,12 @@ func _spawn_wave() -> void:
 		boss_spawned = true
 		chapter_label.text = "BABAK 3: BOSS HILMI JR PRO ZOMBIE"
 		_spawn_zombie(player.global_position + Vector3(0, 0, -17), true)
-		for i in range(3):
-			var angle := TAU * float(i) / 3.0
+		for i in range(mini(3 + int((persistent_level - 1) / 3), 8)):
+			var angle := TAU * float(i) / float(mini(3 + int((persistent_level - 1) / 3), 8))
 			_spawn_zombie(player.global_position + Vector3(cos(angle) * 12.0, 0, sin(angle) * 12.0), false)
 	else:
 		chapter_label.text = "BABAK %d: %s" % [wave, "KUBURAN TERBIAR" if wave == 1 else "GUDANG ZOMBIE"]
-		var count := 5 + wave * 2
+		var count := 5 + wave * 2 + mini(persistent_level - 1, 20)
 		for i in range(count):
 			var angle := TAU * float(i) / float(count)
 			var radius := rng.randf_range(12.0, 19.0)
@@ -398,7 +517,7 @@ func _make_button(parent: Control, text_value: String, button_size: Vector2, off
 	return b
 
 func _process(delta: float) -> void:
-	if game_over or victory:
+	if not started or game_over or victory:
 		return
 	fire_cooldown = maxf(0.0, fire_cooldown - delta)
 	if reload_timer > 0.0:
@@ -413,7 +532,7 @@ func _process(delta: float) -> void:
 	_update_hud()
 
 func _physics_process(delta: float) -> void:
-	if game_over or victory or shop_open:
+	if not started or game_over or victory or shop_open:
 		player.velocity = Vector3.ZERO
 		return
 	var keyboard := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -463,7 +582,7 @@ func _update_zombies(delta: float) -> void:
 		_end_game()
 
 func _shoot() -> void:
-	if game_over or victory or shop_open or fire_cooldown > 0.0 or reload_timer > 0.0:
+	if not started or game_over or victory or shop_open or fire_cooldown > 0.0 or reload_timer > 0.0:
 		return
 	if ammo <= 0:
 		message_label.text = "PELURU HABIS — TEKAN RELOAD"
@@ -489,10 +608,14 @@ func _shoot() -> void:
 				var is_boss := bool(target.get_meta("boss", false))
 				score += 500 if is_boss else 100
 				coins += 500 if is_boss else 25
+				best_score = maxi(best_score, score)
+				_save_progress()
 				zombies.erase(target)
 				target.queue_free()
 				if is_boss:
 					victory = true
+					best_score = maxi(best_score, score)
+					_save_progress()
 					message_label.text = "BOSS TUMBANG! MISI SELESAI!\n+500 KOIN"
 					restart_button.visible = true
 				else:
@@ -503,6 +626,8 @@ func _shoot() -> void:
 							_spawn_wave()
 						else:
 							victory = true
+							best_score = maxi(best_score, score)
+							_save_progress()
 							message_label.text = "SEMUA BABAK SELESAI!"
 							restart_button.visible = true
 			else:
@@ -512,13 +637,13 @@ func _shoot() -> void:
 	_update_hud()
 
 func _reload() -> void:
-	if game_over or victory or reload_timer > 0.0 or ammo >= magazine_size or reserve_ammo <= 0:
+	if not started or game_over or victory or reload_timer > 0.0 or ammo >= magazine_size or reserve_ammo <= 0:
 		return
 	reload_timer = RELOAD_SECONDS
 	message_label.text = "SEDANG RELOAD..."
 
 func _toggle_shop() -> void:
-	if game_over or victory:
+	if not started or game_over or victory:
 		return
 	shop_open = not shop_open
 	shop_panel.visible = shop_open
@@ -532,6 +657,7 @@ func _upgrade_damage() -> void:
 	coins -= cost
 	damage_level += 1
 	damage += 15
+	_save_progress()
 	_refresh_shop()
 	message_label.text = "DAMAGE NAIK KE %d!" % damage
 	_update_hud()
@@ -550,6 +676,7 @@ func _buy_smg() -> void:
 	magazine_size = 30
 	ammo = magazine_size
 	reserve_ammo += 120
+	_save_progress()
 	_refresh_gun()
 	_refresh_shop()
 	_update_hud()
@@ -569,6 +696,7 @@ func _buy_rifle() -> void:
 	magazine_size = 8
 	ammo = magazine_size
 	reserve_ammo += 48
+	_save_progress()
 	_refresh_gun()
 	_refresh_shop()
 	_update_hud()
@@ -606,6 +734,8 @@ func _update_hud() -> void:
 
 func _end_game() -> void:
 	game_over = true
+	best_score = maxi(best_score, score)
+	_save_progress()
 	hp = 0
 	message_label.text = "GAME OVER\nSkor: %d  |  Koin: %d" % [score, coins]
 	restart_button.visible = true
@@ -616,6 +746,8 @@ func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
 func _input(event: InputEvent) -> void:
+	if not started:
+		return
 	if event is InputEventMouseMotion and not OS.has_feature("mobile") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not game_over:
 		_rotate_view(event.relative)
 	elif event is InputEventScreenTouch:
