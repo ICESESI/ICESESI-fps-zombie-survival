@@ -625,12 +625,12 @@ func _update_zombies(delta: float) -> void:
 		if not is_instance_valid(zombie):
 			zombies.erase(zombie)
 			continue
-		var to_player := player.global_position - zombie.global_position
+		var to_player: Vector3 = player.global_position - zombie.global_position
 		to_player.y = 0
-		var distance := to_player.length()
+		var distance: float = to_player.length()
 		var is_boss := bool(zombie.get_meta("boss", false))
 		if distance > (1.75 if is_boss else 1.25):
-			var direction := to_player.normalized()
+			var direction: Vector3 = to_player.normalized()
 			var speed := float(zombie.get_meta("speed", 1.5))
 			zombie.velocity.x = direction.x * speed
 			zombie.velocity.z = direction.z * speed
@@ -848,7 +848,7 @@ func _input(event: InputEvent) -> void:
 				look_touch = -1
 	elif event is InputEventScreenDrag:
 		if event.index == move_touch:
-			var offset := event.position - move_origin
+			var offset: Vector2 = event.position - move_origin
 			var radius := 52.0
 			move_vector = Vector2(clampf(offset.x / radius, -1.0, 1.0), clampf(offset.y / radius, -1.0, 1.0))
 			joystick_knob.position = Vector2(40, 40) + Vector2(move_vector.x, move_vector.y) * 35.0
