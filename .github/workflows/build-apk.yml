@@ -82,7 +82,7 @@ jobs:
       - name: Install required tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip ca-certificates
+          DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip ca-certificates python3
 
       - name: Install Godot Android export templates
         shell: bash
