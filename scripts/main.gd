@@ -582,7 +582,21 @@ func _build_hud() -> void:
 	joystick_knob.position = Vector2(40, 40)
 	joystick_base.add_child(joystick_knob)
 
-	fire_button = _make_button(root, "TEMBAK", Vector2(116, 70), Vector2(-135, -90))
+	fire_button = _make_button(root, "TEMBAK", Vector2(100, 100), Vector2(-125, -105))
+	fire_button.add_theme_font_size_override("font_size", 16)
+	for state in ["normal", "hover", "pressed", "focus"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color(0.72, 0.12, 0.08, 0.92) if state != "pressed" else Color(0.95, 0.28, 0.10, 1.0)
+		style.corner_radius_top_left = 50
+		style.corner_radius_top_right = 50
+		style.corner_radius_bottom_left = 50
+		style.corner_radius_bottom_right = 50
+		style.border_width_left = 3
+		style.border_width_right = 3
+		style.border_width_top = 3
+		style.border_width_bottom = 3
+		style.border_color = Color(1.0, 0.72, 0.58, 0.95)
+		fire_button.add_theme_stylebox_override(state, style)
 	fire_button.pressed.connect(_shoot)
 	reload_button = _make_button(root, "RELOAD", Vector2(104, 52), Vector2(-250, -76))
 	reload_button.pressed.connect(_reload)
@@ -983,6 +997,35 @@ func _end_game() -> void:
 func _restart_game() -> void:
 	get_tree().reload_current_scene()
 
+func _dispatch_mobile_button(pos: Vector2) -> bool:
+	# Start screen action.
+	if not started:
+		if is_instance_valid(start_button) and start_button.is_visible_in_tree():
+			if start_button.get_global_rect().has_point(pos):
+				_start_game()
+				return true
+		return false
+
+	# The shop overlay owns its own controls; let their native GUI events work.
+	if shop_open:
+		return false
+
+	var actions: Array = [
+		[fire_button, Callable(self, "_shoot")],
+		[reload_button, Callable(self, "_reload")],
+		[shop_button, Callable(self, "_toggle_shop")],
+		[jump_button, Callable(self, "_jump")],
+		[heal_button, Callable(self, "_use_heal")],
+		[bomb_button, Callable(self, "_throw_bomb")],
+		[restart_button, Callable(self, "_restart_game")]
+	]
+	for item in actions:
+		var control := item[0] as Control
+		if is_instance_valid(control) and control.is_visible_in_tree() and control.get_global_rect().has_point(pos):
+			(item[1] as Callable).call()
+			return true
+	return false
+
 func _touch_hits_ui(pos: Vector2) -> bool:
     var controls: Array[Control] = [
         fire_button, reload_button, shop_button,
@@ -1005,6 +1048,13 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				_start_game()
 				return
+	if event is InputEventScreenTouch and event.pressed:
+		# Dispatch mobile HUD actions directly from touch coordinates.
+		# This is a fallback for Android builds where dynamically-created
+		# Buttons do not consistently receive GUI pressed events.
+		if _dispatch_mobile_button(event.position):
+			get_viewport().set_input_as_handled()
+			return
 	if not started:
 		return
 	if event is InputEventMouseMotion and not OS.has_feature("mobile") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not game_over:
