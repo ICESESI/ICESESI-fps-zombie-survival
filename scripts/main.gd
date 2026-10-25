@@ -480,6 +480,35 @@ func _spawn_zombie(at_position: Vector3, is_boss := false) -> void:
 	head.position = Vector3(0, 1.83 if is_boss else 1.68, 0)
 	zombie.add_child(head)
 
+	# Simple humanoid limbs built from Godot meshes; pivoted for walking animation.
+	var limb_mat := _make_mat(Color(0.20, 0.34, 0.20) if not is_boss else Color(0.34, 0.16, 0.13))
+	for side in [-1.0, 1.0]:
+		var arm_pivot := Node3D.new()
+		arm_pivot.name = "ArmPivotL" if side < 0 else "ArmPivotR"
+		arm_pivot.position = Vector3(side * (0.42 if not is_boss else 0.72), 1.25 if not is_boss else 1.35, 0)
+		zombie.add_child(arm_pivot)
+		var arm := MeshInstance3D.new()
+		var arm_mesh := CapsuleMesh.new()
+		arm_mesh.radius = 0.13 if not is_boss else 0.20
+		arm_mesh.height = 0.82 if not is_boss else 1.0
+		arm.mesh = arm_mesh
+		arm.material_override = limb_mat
+		arm.position = Vector3(0, -0.30, 0)
+		arm_pivot.add_child(arm)
+
+		var leg_pivot := Node3D.new()
+		leg_pivot.name = "LegPivotL" if side < 0 else "LegPivotR"
+		leg_pivot.position = Vector3(side * 0.19, 0.48 if not is_boss else 0.52, 0)
+		zombie.add_child(leg_pivot)
+		var leg := MeshInstance3D.new()
+		var leg_mesh := CapsuleMesh.new()
+		leg_mesh.radius = 0.15 if not is_boss else 0.22
+		leg_mesh.height = 0.78 if not is_boss else 0.9
+		leg.mesh = leg_mesh
+		leg.material_override = limb_mat
+		leg.position = Vector3(0, -0.28, 0)
+		leg_pivot.add_child(leg)
+
 	var eye_mat := _make_mat(Color(1.0, 0.04, 0.015))
 	for eye_x in [-0.10, 0.10]:
 		var eye := MeshInstance3D.new()
@@ -661,7 +690,7 @@ func _build_hud() -> void:
 	joystick_knob.position = Vector2(40, 40)
 	joystick_base.add_child(joystick_knob)
 
-	fire_button = _make_button(root, "TEMBAK", Vector2(116, 70), Vector2(-135, -90))
+	fire_button = _make_button(root, "TEMBAK", Vector2(116, 70), Vector2(-285, -165))
 	fire_button.pressed.connect(_fire_button_pressed)
 	fire_button.text = "●"
 	fire_button.size = Vector2(92, 92)
@@ -677,17 +706,17 @@ func _build_hud() -> void:
 	fire_button.add_theme_stylebox_override("hover", fire_hover)
 	fire_button.add_theme_stylebox_override("pressed", fire_hover)
 	fire_button.add_theme_font_size_override("font_size", 34)
-	switch_weapon_button = _make_button(root, "TUKAR", Vector2(88, 44), Vector2(-145, -205))
+	switch_weapon_button = _make_button(root, "TUKAR", Vector2(88, 44), Vector2(-150, -315))
 	switch_weapon_button.pressed.connect(_switch_weapon)
-	reload_button = _make_button(root, "RELOAD", Vector2(104, 52), Vector2(-250, -76))
+	reload_button = _make_button(root, "RELOAD", Vector2(104, 52), Vector2(-420, -100))
 	reload_button.pressed.connect(_reload)
-	shop_button = _make_button(root, "KEDAI", Vector2(110, 52), Vector2(-135, -160))
+	shop_button = _make_button(root, "KEDAI", Vector2(110, 52), Vector2(-150, -250))
 	shop_button.pressed.connect(_toggle_shop)
-	jump_button = _make_button(root, "LOMPAT", Vector2(104, 48), Vector2(-260, -145))
+	jump_button = _make_button(root, "LOMPAT", Vector2(104, 48), Vector2(-285, -245))
 	jump_button.pressed.connect(_jump)
-	heal_button = _make_button(root, "HEAL x3", Vector2(104, 48), Vector2(-380, -145))
+	heal_button = _make_button(root, "HEAL x3", Vector2(104, 48), Vector2(-420, -245))
 	heal_button.pressed.connect(_use_heal)
-	bomb_button = _make_button(root, "BOM x2", Vector2(104, 48), Vector2(-380, -85))
+	bomb_button = _make_button(root, "BOM x2", Vector2(104, 48), Vector2(-420, -185))
 	bomb_button.pressed.connect(_throw_bomb)
 
 	restart_button = _make_button(root, "MAIN SEMULA", Vector2(200, 62), Vector2(-100, 0))
@@ -933,6 +962,16 @@ func _update_zombies(delta: float) -> void:
 		to_player.y = 0
 		var distance: float = to_player.length()
 		var is_boss := bool(zombie.get_meta("boss", false))
+		var walk_phase := float(Time.get_ticks_msec()) * 0.009 * float(zombie.get_meta("speed", 1.5))
+		for pivot_name in ["ArmPivotL", "ArmPivotR", "LegPivotL", "LegPivotR"]:
+			var pivot := zombie.get_node_or_null(pivot_name) as Node3D
+			if pivot != null:
+				var sign_value := -1.0 if pivot_name.ends_with("L") else 1.0
+				var swing := sin(walk_phase) * 0.42 * sign_value
+				if pivot_name.begins_with("Arm"):
+					pivot.rotation.x = -swing
+				else:
+					pivot.rotation.x = swing
 		if distance > (1.75 if is_boss else 1.25):
 			var direction: Vector3 = to_player.normalized()
 			var speed := float(zombie.get_meta("speed", 1.5))
