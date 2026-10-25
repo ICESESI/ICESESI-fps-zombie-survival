@@ -1,0 +1,6 @@
+BIG GAMEPLAY/HUD UPDATE
+- Rearranged mobile HUD: fire button is higher and shifted toward screen centre; utility buttons are in a more orderly right-side cluster.
+- Added built-in 3D humanoid arms and legs to zombie models.
+- Added procedural arm/leg swing while zombies move; uses Godot built-in meshes and no external asset dependencies.
+- No filler files or dummy data were added to inflate ZIP size.
+- Build and test with Godot/GitHub Actions before release; not compiled on a physical device here.
