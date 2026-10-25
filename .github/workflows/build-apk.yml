@@ -49,7 +49,7 @@ jobs:
             /usr/local/android-sdk \
             /usr/local/lib/android/sdk \
             /root/Android/Sdk; do
-            if [ -n "$candidate" ] && [ -d "$candidate" ] && [ -d "$candidate/platform-tools" ]; then
+            if [ -n "$candidate" ] && [ -d "$candidate/platform-tools" ] && [ -d "$candidate/platforms" ] && [ -d "$candidate/build-tools" ]; then
               SDK="$candidate"
               break
             fi
